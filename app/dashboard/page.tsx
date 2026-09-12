@@ -37,6 +37,7 @@ interface Profile {
   semester: number;
   target_threshold: number;
   semester_start_date?: string;
+  is_admin?: boolean;
 }
 
 interface TimetableSlot {
@@ -124,7 +125,6 @@ export default function CampusDashboard() {
   const [editorColSlots, setEditorColSlots] = useState<string[]>(DEFAULT_BASE_SLOTS);
 
   const [editorMatrix, setEditorMatrix] = useState<Record<string, SubjectBlock | null>>({});
-  // Merged spans map: "rIdx-cIdx" -> span length N
   const [mergedSpans, setMergedSpans] = useState<Record<string, number>>({});
 
   const [subjectPalette, setSubjectPalette] = useState<SubjectBlock[]>([]);
@@ -132,10 +132,16 @@ export default function CampusDashboard() {
   const [newProf, setNewProf] = useState('');
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
 
+  // Block editing state
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [editProf, setEditProf] = useState('');
   const [editColor, setEditColor] = useState('');
+
+  // Mobile/Desktop Drag & Tap States
+  const [selectedPaletteBlock, setSelectedPaletteBlock] = useState<SubjectBlock | null>(null);
+  const [touchDraggingBlock, setTouchDraggingBlock] = useState<SubjectBlock | null>(null);
+  const [touchCoord, setTouchCoord] = useState<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -149,7 +155,6 @@ export default function CampusDashboard() {
     }
   }, []);
 
-  // Consecutive Slot Merging Engine for any arbitrary N slots
   const mergeConsecutiveSlots = useCallback((slots: TimetableSlot[]): MergedSlot[] => {
     if (slots.length === 0) return [];
     const sorted = [...slots].sort((a, b) => a.start_time.localeCompare(b.start_time));
@@ -294,7 +299,6 @@ export default function CampusDashboard() {
     loadData();
   }, [loadData]);
 
-  // Synchronize slot list for active selected date
   useEffect(() => {
     if (!user) return;
 
@@ -352,13 +356,11 @@ export default function CampusDashboard() {
     };
   }, [selectedDate, allSlots, user, mergeConsecutiveSlots]);
 
-  // Normalizer: Parses start and end time string into minutes from midnight
   const parseTimeToMinutes = (t: string) => {
     const [h, m] = t.slice(0, 5).split(':').map(Number);
     return h * 60 + m;
   };
 
-  // Open Editor: strictly maps onto atomic columns without duplicated composite headers
   const openEditor = () => {
     setWefDate(selectedDate);
     const matrix: Record<string, SubjectBlock | null> = {};
@@ -368,12 +370,10 @@ export default function CampusDashboard() {
     const activeSlots = allSlots.filter((s) => !s.effective_until);
     const targetSlots = activeSlots.length > 0 ? activeSlots : allSlots;
 
-    // Use clean, canonical 6-slot atomic periods
     const baseColumns = [...DEFAULT_BASE_SLOTS];
     setEditorColSlots(baseColumns);
     setEditorRowDays(['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
 
-    // Build helper to locate which base column a time corresponds to
     const colRanges = baseColumns.map((col, idx) => {
       const [startStr, endStr] = col.split('-').map((s) => s.trim());
       return {
@@ -391,11 +391,9 @@ export default function CampusDashboard() {
       const slotStartMin = parseTimeToMinutes(slot.start_time);
       const slotEndMin = parseTimeToMinutes(slot.end_time);
 
-      // Find matching start column
       const startCol = colRanges.findIndex((c) => Math.abs(c.startMin - slotStartMin) <= 10);
       if (startCol === -1) return;
 
-      // Find matching end column to compute span length
       let spanCount = 1;
       for (let i = startCol; i < colRanges.length; i++) {
         if (slotEndMin >= colRanges[i].endMin - 10) {
@@ -416,7 +414,6 @@ export default function CampusDashboard() {
         block.prof = slot.faculty;
       }
 
-      // Populate base cell and any merged span
       matrix[`${rIdx}-${startCol}`] = block;
       if (spanCount > 1) {
         spans[`${rIdx}-${startCol}`] = spanCount;
@@ -432,7 +429,6 @@ export default function CampusDashboard() {
     setIsEditorOpen(true);
   };
 
-  // Merge any arbitrary contiguous length N of identical subject blocks
   const mergeContiguousN = (rIdx: number, startCol: number, length: number) => {
     const baseBlock = editorMatrix[`${rIdx}-${startCol}`];
     if (!baseBlock || length < 2) return;
@@ -448,7 +444,6 @@ export default function CampusDashboard() {
     }));
   };
 
-  // Unmerge back to individual cell units
   const unmergeCells = (rIdx: number, startCol: number) => {
     setMergedSpans((prev) => {
       const next = { ...prev };
@@ -493,6 +488,7 @@ export default function CampusDashboard() {
     });
   };
 
+  // HTML5 Desktop Drag Handlers
   const handleDragStart = (e: React.DragEvent, block: SubjectBlock) => {
     e.dataTransfer.setData('application/json', JSON.stringify(block));
     e.dataTransfer.effectAllowed = 'copy';
@@ -511,6 +507,44 @@ export default function CampusDashboard() {
     } catch (err) {
       console.error(err);
     }
+  };
+
+  // Mobile Touch Drag Engine
+  const handleTouchStart = (e: React.TouchEvent, block: SubjectBlock) => {
+    const touch = e.touches[0];
+    setTouchDraggingBlock(block);
+    setTouchCoord({ x: touch.clientX, y: touch.clientY });
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!touchDraggingBlock) return;
+    const touch = e.touches[0];
+    setTouchCoord({ x: touch.clientX, y: touch.clientY });
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (!touchDraggingBlock || !touchCoord) {
+      setTouchDraggingBlock(null);
+      setTouchCoord(null);
+      return;
+    }
+
+    // Identify which cell is under the release position
+    const targetElement = document.elementFromPoint(touchCoord.x, touchCoord.y);
+    const cell = targetElement?.closest('[data-grid-cell]');
+
+    if (cell) {
+      const cellCoord = cell.getAttribute('data-grid-cell');
+      if (cellCoord) {
+        setEditorMatrix((prev) => ({
+          ...prev,
+          [cellCoord]: touchDraggingBlock,
+        }));
+      }
+    }
+
+    setTouchDraggingBlock(null);
+    setTouchCoord(null);
   };
 
   const clearMatrixCell = (rowIndex: number, colIndex: number) => {
@@ -587,9 +621,9 @@ export default function CampusDashboard() {
       });
       return copy;
     });
+    if (selectedPaletteBlock?.id === blockId) setSelectedPaletteBlock(null);
   };
 
-  // Normalizes and persists schedule with atomic slots preserved
   const handleSaveScheduleChanges = async () => {
     if (!user) return;
     setIsSavingSchedule(true);
@@ -613,7 +647,6 @@ export default function CampusDashboard() {
           const item = editorMatrix[`${rIdx}-${cIdx}`];
 
           if (item) {
-            // Write each atomic base period so normalized structure is preserved
             for (let offset = 0; offset < spanLen; offset++) {
               const currentSlot = editorColSlots[cIdx + offset];
               const [sPart, ePart] = currentSlot.split('-').map((s) => s.trim());
@@ -804,8 +837,28 @@ export default function CampusDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-zinc-100 dark:bg-[#0c0c0e] text-zinc-900 dark:text-zinc-100 antialiased selection:bg-blue-500/20">
+    <div
+      className="min-h-screen bg-zinc-100 dark:bg-[#0c0c0e] text-zinc-900 dark:text-zinc-100 antialiased selection:bg-blue-500/20"
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
       
+      {/* Ghost Preview Pill for Mobile Drag */}
+      {touchDraggingBlock && touchCoord && (
+        <div
+          style={{
+            position: 'fixed',
+            left: `${touchCoord.x - 60}px`,
+            top: `${touchCoord.y - 45}px`,
+            pointerEvents: 'none',
+            zIndex: 9999,
+          }}
+          className={`px-3 py-1.5 rounded-xl border shadow-2xl backdrop-blur-md opacity-90 scale-105 font-bold text-xs ${touchDraggingBlock.tagColor}`}
+        >
+          {touchDraggingBlock.name}
+        </div>
+      )}
+
       {/* Top Header */}
       <header className="sticky top-0 z-40 px-4 md:px-8 py-3.5 backdrop-blur-xl bg-white/75 dark:bg-zinc-900/75 border-b border-zinc-200 dark:border-zinc-800">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
@@ -814,9 +867,16 @@ export default function CampusDashboard() {
               A
             </div>
             <div>
-              <h1 className="text-sm font-semibold tracking-tight leading-tight">
-                {profile?.college_name || 'College Workspace'}
-              </h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm font-semibold tracking-tight leading-tight">
+                  {profile?.college_name || 'College Workspace'}
+                </h1>
+                {profile?.is_admin && (
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                    Admin
+                  </span>
+                )}
+              </div>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
                 {profile?.username || user?.email?.split('@')[0]} · {profile?.stream || 'Session'}
               </p>
@@ -1119,7 +1179,7 @@ export default function CampusDashboard() {
           )}
         </section>
 
-        {/* DATA VISUALIZATION SECTION */}
+        {/* Data Visualization Section */}
         <section className="space-y-6 pt-4">
           <div className="flex items-center gap-2">
             <BarChart3 className="w-4 h-4 text-blue-500" />
@@ -1315,7 +1375,7 @@ export default function CampusDashboard() {
               <div>
                 <h3 className="text-base font-bold tracking-tight">Modify Weekly Schedule</h3>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Manage class blocks across base time periods. Consecutive identical blocks merge cleanly into 1 class.
+                  Drag or tap to place courses into base slots. Consecutive identical blocks merge cleanly into 1 class.
                 </p>
               </div>
 
@@ -1407,10 +1467,30 @@ export default function CampusDashboard() {
               {/* Left Subject Palette Shelf */}
               <div className="lg:col-span-4 space-y-4">
                 <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/30 rounded-2xl p-4 space-y-3">
-                  <div className="flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-zinc-500" />
-                    <h4 className="text-xs font-bold uppercase tracking-tight">Subject Palette</h4>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-zinc-500" />
+                      <h4 className="text-xs font-bold uppercase tracking-tight">Subject Palette</h4>
+                    </div>
+                    {selectedPaletteBlock && (
+                      <button
+                        onClick={() => setSelectedPaletteBlock(null)}
+                        className="text-[10px] text-blue-500 underline font-semibold"
+                      >
+                        Clear Active
+                      </button>
+                    )}
                   </div>
+
+                  {selectedPaletteBlock ? (
+                    <div className="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20 text-[11px] text-blue-600 dark:text-blue-400">
+                      Active: <strong>{selectedPaletteBlock.name}</strong>. Tap any slot in the grid to place it.
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-zinc-400">
+                      Drag a card, or tap to select and tap a slot to place.
+                    </p>
+                  )}
 
                   <form onSubmit={handleAddPaletteBlock} className="space-y-2">
                     <input
@@ -1502,9 +1582,19 @@ export default function CampusDashboard() {
                           key={block.id}
                           draggable
                           onDragStart={(e) => handleDragStart(e, block)}
-                          className={`p-2.5 rounded-xl border flex items-center justify-between cursor-grab active:cursor-grabbing hover:scale-[1.01] transition select-none group ${block.tagColor}`}
+                          onTouchStart={(e) => handleTouchStart(e, block)}
+                          onClick={() => {
+                            setSelectedPaletteBlock((prev) => (prev?.id === block.id ? null : block));
+                          }}
+                          className={`p-2.5 rounded-xl border flex items-center justify-between cursor-grab active:cursor-grabbing hover:scale-[1.01] transition select-none group ${
+                            block.tagColor
+                          } ${
+                            selectedPaletteBlock?.id === block.id
+                              ? 'ring-2 ring-blue-500 ring-offset-1 dark:ring-offset-zinc-950 scale-[1.02]'
+                              : ''
+                          }`}
                         >
-                          <div className="flex items-center gap-2 overflow-hidden">
+                          <div className="flex items-center gap-2 overflow-hidden pointer-events-none">
                             <GripVertical className="w-3.5 h-3.5 opacity-40 shrink-0" />
                             <div className="truncate">
                               <p className="text-xs font-semibold leading-tight truncate">{block.name}</p>
@@ -1515,7 +1605,10 @@ export default function CampusDashboard() {
                           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
                             <button
                               type="button"
-                              onClick={() => startEditingBlock(block)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                startEditingBlock(block);
+                              }}
                               className="p-1 rounded-md text-zinc-400 hover:text-blue-500 hover:bg-white/60 dark:hover:bg-zinc-800 transition"
                               title="Edit block"
                             >
@@ -1523,7 +1616,10 @@ export default function CampusDashboard() {
                             </button>
                             <button
                               type="button"
-                              onClick={() => deletePaletteBlock(block.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deletePaletteBlock(block.id);
+                              }}
                               className="p-1 rounded-md text-zinc-400 hover:text-rose-500 hover:bg-white/60 dark:hover:bg-zinc-800 transition"
                               title="Delete block"
                             >
@@ -1537,7 +1633,7 @@ export default function CampusDashboard() {
                 </div>
               </div>
 
-              {/* Right Matrix Sheet with Normalized Atomic Slots */}
+              {/* Right Matrix Sheet with Atomic Slots */}
               <div className="lg:col-span-8 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
@@ -1633,7 +1729,6 @@ export default function CampusDashboard() {
                               const spanLen = mergedSpans[`${rIdx}-${currIdx}`] || 1;
                               const item = editorMatrix[`${rIdx}-${currIdx}`];
 
-                              // Detect run-length N of identical contiguous blocks
                               let contiguousCount = 1;
                               if (item && !mergedSpans[`${rIdx}-${currIdx}`]) {
                                 for (let scan = currIdx + 1; scan < editorColSlots.length; scan++) {
@@ -1651,13 +1746,24 @@ export default function CampusDashboard() {
                               cells.push(
                                 <td
                                   key={currIdx}
+                                  data-grid-cell={`${rIdx}-${currIdx}`}
                                   colSpan={spanLen}
                                   onDragOver={(e) => {
                                     e.preventDefault();
                                     e.dataTransfer.dropEffect = 'copy';
                                   }}
                                   onDrop={(e) => handleDrop(rIdx, currIdx, e)}
-                                  className="p-1.5 border-r border-zinc-200 dark:border-zinc-800 h-16 min-w-[150px] relative group"
+                                  onClick={() => {
+                                    if (selectedPaletteBlock) {
+                                      setEditorMatrix((prev) => ({
+                                        ...prev,
+                                        [`${rIdx}-${currIdx}`]: selectedPaletteBlock,
+                                      }));
+                                    }
+                                  }}
+                                  className={`p-1.5 border-r border-zinc-200 dark:border-zinc-800 h-16 min-w-[150px] relative group transition cursor-pointer ${
+                                    selectedPaletteBlock ? 'hover:bg-blue-500/5 dark:hover:bg-blue-500/10' : ''
+                                  }`}
                                 >
                                   {item ? (
                                     <div className={`h-full w-full p-2 rounded-lg border flex items-center justify-between text-xs transition ${item.tagColor}`}>
@@ -1672,7 +1778,10 @@ export default function CampusDashboard() {
                                         {spanLen > 1 ? (
                                           <button
                                             type="button"
-                                            onClick={() => unmergeCells(rIdx, currIdx)}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              unmergeCells(rIdx, currIdx);
+                                            }}
                                             className="px-1.5 py-0.5 rounded bg-white/70 dark:bg-zinc-800 text-[10px] font-bold text-zinc-600 dark:text-zinc-300 hover:text-blue-500 transition flex items-center gap-1"
                                             title="Split back to individual blocks"
                                           >
@@ -1682,7 +1791,10 @@ export default function CampusDashboard() {
                                         ) : canMerge ? (
                                           <button
                                             type="button"
-                                            onClick={() => mergeContiguousN(rIdx, currIdx, contiguousCount)}
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              mergeContiguousN(rIdx, currIdx, contiguousCount);
+                                            }}
                                             className="px-1.5 py-0.5 rounded bg-blue-600 text-white text-[10px] font-bold hover:bg-blue-500 transition flex items-center gap-1 shadow-sm"
                                             title={`Merge all ${contiguousCount} slots into 1`}
                                           >
@@ -1692,7 +1804,11 @@ export default function CampusDashboard() {
                                         ) : null}
 
                                         <button
-                                          onClick={() => clearMatrixCell(rIdx, currIdx)}
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            clearMatrixCell(rIdx, currIdx);
+                                          }}
                                           className="p-1 text-zinc-400 hover:text-rose-500 transition"
                                         >
                                           <Trash2 className="w-3 h-3" />
