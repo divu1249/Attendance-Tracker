@@ -32,7 +32,10 @@ import {
   Download,
   Share2,
   Copy,
-  CheckCheck
+  CheckCheck,
+  User,
+  Settings,
+  AlertTriangle
 } from 'lucide-react';
 
 interface Profile {
@@ -117,6 +120,17 @@ export default function CampusDashboard() {
   const [firstEntryDate, setFirstEntryDate] = useState<string | null>(null);
   const [subjectStats, setSubjectStats] = useState<Record<string, { present: number; total: number; od: number }>>({});
 
+  // Profile Modal State
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [editUsername, setEditUsername] = useState('');
+  const [editCollege, setEditCollege] = useState('');
+  const [editStream, setEditStream] = useState('');
+  const [editSemester, setEditSemester] = useState(1);
+  const [editTargetThreshold, setEditTargetThreshold] = useState(75);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+
   // Floating Timetable modal
   const [showTimetableModal, setShowTimetableModal] = useState(false);
   const [modalPos, setModalPos] = useState({ x: 40, y: 75 });
@@ -152,11 +166,9 @@ export default function CampusDashboard() {
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const touchStartPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
-  // Feature: What-If Simulator
+  // Feature Modals
   const [showSimulator, setShowSimulator] = useState(false);
   const [simulatedSkips, setSimulatedSkips] = useState(1);
-
-  // Feature: Share & Import Schedule
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareCode, setShareCode] = useState('');
   const [copied, setCopied] = useState(false);
@@ -308,7 +320,29 @@ export default function CampusDashboard() {
 
     if (prof) {
       setProfile(prof);
+      setEditUsername(prof.username || '');
+      setEditCollege(prof.college_name || '');
+      setEditStream(prof.stream || '');
+      setEditSemester(prof.semester || 1);
+      setEditTargetThreshold(prof.target_threshold || 75);
       if (prof.semester_start_date) setEditorSemesterStart(prof.semester_start_date);
+    } else {
+      // Fallback default creation if row does not exist
+      const defaultProf = {
+        id: authData.user.id,
+        username: authData.user.email?.split('@')[0] || 'Student',
+        college_name: 'My College',
+        stream: 'B.Tech AI',
+        semester: 1,
+        target_threshold: 75,
+      };
+      await supabase.from('profiles').upsert(defaultProf);
+      setProfile(defaultProf as any);
+      setEditUsername(defaultProf.username);
+      setEditCollege(defaultProf.college_name);
+      setEditStream(defaultProf.stream);
+      setEditSemester(defaultProf.semester);
+      setEditTargetThreshold(defaultProf.target_threshold);
     }
 
     const { data: tt } = await supabase
@@ -387,6 +421,69 @@ export default function CampusDashboard() {
   const parseTimeToMinutes = (t: string) => {
     const [h, m] = t.slice(0, 5).split(':').map(Number);
     return h * 60 + m;
+  };
+
+  // Profile Update Handler
+  const handleUpdateProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    setIsSavingProfile(true);
+
+    try {
+      const updates = {
+        username: editUsername.trim(),
+        college_name: editCollege.trim(),
+        stream: editStream.trim(),
+        semester: Number(editSemester),
+        target_threshold: Number(editTargetThreshold),
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await supabase
+        .from('profiles')
+        .update(updates)
+        .eq('id', user.id);
+
+      if (error) throw error;
+
+      setProfile((prev) => (prev ? { ...prev, ...updates } : null));
+      setShowProfileModal(false);
+    } catch (err: any) {
+      alert('Failed to update profile: ' + err.message);
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  // Account Deletion Handler
+  const handleDeleteAccount = async () => {
+    if (deleteConfirmText !== 'DELETE') {
+      alert('Please type DELETE in capital letters to confirm.');
+      return;
+    }
+
+    const doubleCheck = confirm(
+      'Are you absolutely sure? All attendance records, timetable slots, and history will be permanently purged.'
+    );
+    if (!doubleCheck || !user) return;
+
+    setIsDeletingAccount(true);
+    try {
+      // Calls the secure stored procedure defined in Supabase migration
+      const { error } = await supabase.rpc('delete_user_account');
+      if (error) {
+        // Fallback cascading manual deletes if RPC is not installed
+        await supabase.from('attendance_records').delete().eq('user_id', user.id);
+        await supabase.from('timetable').delete().eq('user_id', user.id);
+        await supabase.from('holidays').delete().eq('user_id', user.id);
+        await supabase.from('profiles').delete().eq('id', user.id);
+      }
+      await supabase.auth.signOut();
+      window.location.replace('/');
+    } catch (err: any) {
+      alert('Deletion failed: ' + err.message);
+      setIsDeletingAccount(false);
+    }
   };
 
   const openEditor = () => {
@@ -516,7 +613,6 @@ export default function CampusDashboard() {
     });
   };
 
-  // HTML5 Desktop Drag Handlers
   const handleDragStart = (e: React.DragEvent, block: SubjectBlock) => {
     e.dataTransfer.setData('application/json', JSON.stringify(block));
     e.dataTransfer.effectAllowed = 'copy';
@@ -537,7 +633,6 @@ export default function CampusDashboard() {
     }
   };
 
-  // Touch Drag Engine with Long-Press Detection
   const handleTouchStart = (e: React.TouchEvent, block: SubjectBlock) => {
     const touch = e.touches[0];
     touchStartPos.current = { x: touch.clientX, y: touch.clientY };
@@ -762,7 +857,6 @@ export default function CampusDashboard() {
     }
   };
 
-  // 3-State attendance action (present | absent | od)
   const handleMarkMerged = async (mergedSlot: MergedSlot, status: 'present' | 'absent' | 'od') => {
     if (!user || isHoliday) return;
 
@@ -828,7 +922,6 @@ export default function CampusDashboard() {
     setSelectedDate(`${yyyy}-${mm}-${dd}`);
   };
 
-  // Feature: CSV Exporter
   const handleExportCSV = async () => {
     if (!user) return;
 
@@ -872,7 +965,6 @@ export default function CampusDashboard() {
     document.body.removeChild(link);
   };
 
-  // Feature: Share Timetable Generation
   const handleGenerateShareCode = async () => {
     if (!user) return;
     setShareMessage('');
@@ -905,7 +997,6 @@ export default function CampusDashboard() {
     }
   };
 
-  // Feature: Import Timetable via Peer Code
   const handleImportTimetable = async () => {
     if (!user || !importCodeInput.trim()) return;
     setImporting(true);
@@ -936,7 +1027,6 @@ export default function CampusDashboard() {
         effective_until: null,
       }));
 
-      // Invalidate active slots starting from today
       const [y, m, d] = selectedDate.split('-').map(Number);
       const prevDate = new Date(y, m - 1, d - 1).toISOString().split('T')[0];
 
@@ -1010,7 +1100,7 @@ export default function CampusDashboard() {
 
   // Simulator Projections
   const simHeld = totalHeld + simulatedSkips;
-  const simAttended = totalAttended; // All simulated are missed
+  const simAttended = totalAttended;
   const simPercentage = simHeld > 0 ? (simAttended / simHeld) * 100 : 0;
   const simIsBelow = simHeld > 0 && simPercentage < target;
   const simSafeBunks = !simIsBelow && simHeld > 0
@@ -1068,16 +1158,27 @@ export default function CampusDashboard() {
       {/* Top Header */}
       <header className="sticky top-0 z-40 px-4 md:px-8 py-3.5 backdrop-blur-xl bg-white/75 dark:bg-zinc-900/75 border-b border-zinc-200 dark:border-zinc-800">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3.5">
-            {/* Thumbs Up Cat Meme Mascot */}
-            <img
-              src="/logo.png"
-              alt="ShouldISkip Mascot"
-              className="w-14 h-14 rounded-2xl object-contain drop-shadow-md hover:rotate-6 transition duration-200 cursor-pointer shrink-0"
-            />
+          
+          {/* Clickable Profile & Brand Entity */}
+          <div
+            onClick={() => setShowProfileModal(true)}
+            className="flex items-center gap-3.5 cursor-pointer group select-none"
+            title="Click to edit profile & college details"
+          >
+            <div className="relative">
+              <img
+                src="/logo.png"
+                alt="ShouldISkip Mascot"
+                className="w-14 h-14 rounded-2xl object-contain drop-shadow-md group-hover:scale-105 group-hover:rotate-3 transition duration-200 shrink-0"
+              />
+              <span className="absolute -bottom-1 -right-1 bg-blue-600 text-white rounded-full p-1 shadow-md border-2 border-white dark:border-zinc-900">
+                <Settings className="w-2.5 h-2.5" />
+              </span>
+            </div>
+
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-sm font-semibold tracking-tight leading-tight">
+                <h1 className="text-sm font-semibold tracking-tight leading-tight group-hover:text-blue-500 transition">
                   {profile?.college_name || 'ShouldISkip'}
                 </h1>
                 {profile?.is_admin && (
@@ -1087,11 +1188,12 @@ export default function CampusDashboard() {
                 )}
               </div>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                {profile?.username || user?.email?.split('@')[0]} · {profile?.stream || 'Session'}
+                {profile?.username || user?.email?.split('@')[0]} · {profile?.stream || 'Session'} (Sem {profile?.semester || 1})
               </p>
             </div>
           </div>
 
+          {/* Action Bar */}
           <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={() => setShowSimulator(true)}
@@ -1129,7 +1231,7 @@ export default function CampusDashboard() {
 
             <button
               onClick={() => setShowTimetableModal(!showTimetableModal)}
-              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full transition-all border ${
+              className={`flex items-center gap-1.5 text-xs font-semibold px-3.5 py-1.5 rounded-full transition-all border ${
                 showTimetableModal
                   ? 'bg-blue-600 text-white border-transparent'
                   : 'bg-zinc-200/50 dark:bg-zinc-800/50 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300'
@@ -1158,7 +1260,7 @@ export default function CampusDashboard() {
         </div>
       </header>
 
-      {/* Main Dashboard */}
+      {/* Main Dashboard Content */}
       <main className="max-w-6xl mx-auto p-4 md:p-8 space-y-8">
         
         {/* KPI Cards */}
@@ -1305,7 +1407,7 @@ export default function CampusDashboard() {
           </button>
         </div>
 
-        {/* Classes Scheduled for Date */}
+        {/* Scheduled Lectures */}
         <section className="backdrop-blur-xl bg-white/70 dark:bg-zinc-900/60 p-6 md:p-8 rounded-[28px] border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-zinc-200 dark:border-zinc-800 gap-2">
             <div>
@@ -1384,7 +1486,6 @@ export default function CampusDashboard() {
                       </div>
                     </div>
 
-                    {/* 3 Action Buttons: Yes, No, OD */}
                     <div className="flex items-center gap-1.5 self-end sm:self-center flex-wrap">
                       <button
                         onClick={() => handleMarkMerged(mSlot, 'present')}
@@ -1430,7 +1531,7 @@ export default function CampusDashboard() {
           )}
         </section>
 
-        {/* Data Visualizations */}
+        {/* Analytics Section */}
         <section className="space-y-6 pt-4">
           <div className="flex items-center gap-2">
             <BarChart3 className="w-4 h-4 text-blue-500" />
@@ -1543,7 +1644,133 @@ export default function CampusDashboard() {
 
       </main>
 
-      {/* FEATURE MODAL: WHAT-IF BUNK SIMULATOR */}
+      {/* MODAL 1: PROFILE & IDENTITY SETTINGS */}
+      {showProfileModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-[#121214] border border-zinc-200 dark:border-zinc-800 rounded-[28px] max-w-lg w-full p-6 space-y-6 shadow-2xl my-8">
+            <div className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 pb-3">
+              <div className="flex items-center gap-2">
+                <User className="w-4 h-4 text-blue-500" />
+                <h3 className="text-sm font-bold">Profile & College Identity</h3>
+              </div>
+              <button
+                onClick={() => setShowProfileModal(false)}
+                className="w-6 h-6 rounded-full bg-zinc-200/60 dark:bg-zinc-800/60 text-xs flex items-center justify-center text-zinc-500"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateProfile} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-zinc-400">Display Name / Roll No</label>
+                  <input
+                    type="text"
+                    value={editUsername}
+                    onChange={(e) => setEditUsername(e.target.value)}
+                    required
+                    className="w-full bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-zinc-400">College / University</label>
+                  <input
+                    type="text"
+                    value={editCollege}
+                    onChange={(e) => setEditCollege(e.target.value)}
+                    required
+                    className="w-full bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-zinc-400">Stream / Department</label>
+                  <input
+                    type="text"
+                    value={editStream}
+                    onChange={(e) => setEditStream(e.target.value)}
+                    required
+                    placeholder="e.g. B.Tech AI & Data Science"
+                    className="w-full bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-zinc-400">Current Semester</label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="12"
+                    value={editSemester}
+                    onChange={(e) => setEditSemester(Number(e.target.value))}
+                    required
+                    className="w-full bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-zinc-400">Target Attendance Bar</label>
+                  <span className="text-xs font-bold text-blue-500">{editTargetThreshold}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="50"
+                  max="95"
+                  step="1"
+                  value={editTargetThreshold}
+                  onChange={(e) => setEditTargetThreshold(Number(e.target.value))}
+                  className="w-full accent-blue-500 cursor-pointer"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSavingProfile}
+                className="w-full py-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition flex items-center justify-center gap-1.5 shadow-sm"
+              >
+                <CheckCircle className="w-4 h-4" />
+                <span>{isSavingProfile ? 'Updating Profile...' : 'Save Profile Changes'}</span>
+              </button>
+            </form>
+
+            {/* Danger Zone: Purge Account */}
+            <div className="border-t border-zinc-200 dark:border-zinc-800 pt-5 space-y-3">
+              <div className="flex items-center gap-2 text-rose-500">
+                <AlertTriangle className="w-4 h-4" />
+                <h4 className="text-xs font-bold uppercase tracking-wider">Danger Zone: Delete Account</h4>
+              </div>
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                This will permanently delete your timetable, records, profile, and email credentials. Type <strong>DELETE</strong> below to verify.
+              </p>
+
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Type DELETE"
+                  value={deleteConfirmText}
+                  onChange={(e) => setDeleteConfirmText(e.target.value)}
+                  className="flex-1 bg-rose-500/5 border border-rose-500/20 text-rose-500 rounded-xl px-3 py-2 text-xs font-mono uppercase focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={handleDeleteAccount}
+                  disabled={isDeletingAccount || deleteConfirmText !== 'DELETE'}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white text-xs font-semibold transition flex items-center gap-1"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>{isDeletingAccount ? 'Deleting...' : 'Delete Forever'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: WHAT-IF BUNK SIMULATOR */}
       {showSimulator && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white dark:bg-[#121214] border border-zinc-200 dark:border-zinc-800 rounded-[28px] max-w-md w-full p-6 space-y-6 shadow-2xl">
@@ -1580,7 +1807,6 @@ export default function CampusDashboard() {
                 />
               </div>
 
-              {/* Simulation Comparison Matrix */}
               <div className="p-4 rounded-2xl bg-zinc-100 dark:bg-zinc-900/80 border border-zinc-200 dark:border-zinc-800 space-y-3">
                 <div className="flex items-center justify-between text-xs">
                   <span className="text-zinc-500 dark:text-zinc-400">Current Percentage:</span>
@@ -1611,7 +1837,7 @@ export default function CampusDashboard() {
         </div>
       )}
 
-      {/* FEATURE MODAL: PEER TIMETABLE SHARE & IMPORT */}
+      {/* MODAL 3: PEER TIMETABLE SHARE & IMPORT */}
       {showShareModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white dark:bg-[#121214] border border-zinc-200 dark:border-zinc-800 rounded-[28px] max-w-md w-full p-6 space-y-5 shadow-2xl">
@@ -1631,7 +1857,6 @@ export default function CampusDashboard() {
               </button>
             </div>
 
-            {/* Share Out Section */}
             <div className="space-y-3">
               <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Share Your Timetable</h4>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
@@ -1858,7 +2083,7 @@ export default function CampusDashboard() {
               </div>
             </div>
 
-            {/* Grid & Palette Shelf */}
+            {/* Matrix & Shelf */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               <div className="lg:col-span-4 space-y-4">
                 <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/30 rounded-2xl p-4 space-y-3">
