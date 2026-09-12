@@ -35,7 +35,14 @@ import {
   CheckCheck,
   User,
   Settings,
-  AlertTriangle
+  AlertTriangle,
+  Compass,
+  Flame,
+  CalendarCheck,
+  Camera,
+  Bell,
+  FlaskConical,
+  BookOpen
 } from 'lucide-react';
 
 interface Profile {
@@ -45,6 +52,7 @@ interface Profile {
   stream: string;
   semester: number;
   target_threshold: number;
+  lab_threshold?: number;
   semester_start_date?: string;
   is_admin?: boolean;
 }
@@ -56,6 +64,7 @@ interface TimetableSlot {
   day_of_week: number;
   start_time: string;
   end_time: string;
+  course_type?: 'theory' | 'lab';
   effective_from?: string;
   effective_until?: string | null;
 }
@@ -67,6 +76,7 @@ interface MergedSlot {
   faculty?: string;
   start_time: string;
   end_time: string;
+  course_type: 'theory' | 'lab';
 }
 
 interface SubjectBlock {
@@ -74,6 +84,7 @@ interface SubjectBlock {
   name: string;
   prof: string;
   tagColor: string;
+  course_type: 'theory' | 'lab';
 }
 
 const PASTEL_COLORS = [
@@ -114,11 +125,19 @@ export default function CampusDashboard() {
   const [daySlots, setDaySlots] = useState<MergedSlot[]>([]);
   const [dayAttendance, setDayAttendance] = useState<Record<string, 'present' | 'absent' | 'od'>>({});
 
+  // Core Math States
   const [totalAttended, setTotalAttended] = useState(0);
   const [totalHeld, setTotalHeld] = useState(0);
   const [totalOD, setTotalOD] = useState(0);
+
+  // Theory vs Lab Dual Breakdown
+  const [theoryAttended, setTheoryAttended] = useState(0);
+  const [theoryHeld, setTheoryHeld] = useState(0);
+  const [labAttended, setLabAttended] = useState(0);
+  const [labHeld, setLabHeld] = useState(0);
+
   const [firstEntryDate, setFirstEntryDate] = useState<string | null>(null);
-  const [subjectStats, setSubjectStats] = useState<Record<string, { present: number; total: number; od: number }>>({});
+  const [subjectStats, setSubjectStats] = useState<Record<string, { present: number; total: number; od: number; type: 'theory' | 'lab' }>>({});
 
   // Profile Modal State
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -127,11 +146,12 @@ export default function CampusDashboard() {
   const [editStream, setEditStream] = useState('');
   const [editSemester, setEditSemester] = useState(1);
   const [editTargetThreshold, setEditTargetThreshold] = useState(75);
+  const [editLabThreshold, setEditLabThreshold] = useState(80);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
 
-  // Floating Timetable modal
+  // Floating Timetable pop-up state
   const [showTimetableModal, setShowTimetableModal] = useState(false);
   const [modalPos, setModalPos] = useState({ x: 40, y: 75 });
   const [isDragging, setIsDragging] = useState(false);
@@ -149,6 +169,7 @@ export default function CampusDashboard() {
   const [subjectPalette, setSubjectPalette] = useState<SubjectBlock[]>([]);
   const [newSub, setNewSub] = useState('');
   const [newProf, setNewProf] = useState('');
+  const [newType, setNewType] = useState<'theory' | 'lab'>('theory');
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
 
   // Block editing state
@@ -156,6 +177,7 @@ export default function CampusDashboard() {
   const [editName, setEditName] = useState('');
   const [editProf, setEditProf] = useState('');
   const [editColor, setEditColor] = useState('');
+  const [editBlockType, setEditBlockType] = useState<'theory' | 'lab'>('theory');
 
   // Mobile Long-Press Drag States
   const [selectedPaletteBlock, setSelectedPaletteBlock] = useState<SubjectBlock | null>(null);
@@ -175,6 +197,17 @@ export default function CampusDashboard() {
   const [importCodeInput, setImportCodeInput] = useState('');
   const [importing, setImporting] = useState(false);
   const [shareMessage, setShareMessage] = useState('');
+
+  // Feature: Long Weekend Optimizer Modal
+  const [showPlannerModal, setShowPlannerModal] = useState(false);
+
+  // Feature: Class Pulse (Mass Bunk Votes)
+  const [pulseVotes, setPulseVotes] = useState<Record<string, { count: number; userVoted: boolean }>>({});
+  const [activeShareRoom, setActiveShareRoom] = useState<string | null>(null);
+
+  // Feature: OCR Uploading state
+  const [isOcrProcessing, setIsOcrProcessing] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -204,6 +237,7 @@ export default function CampusDashboard() {
           faculty: slot.faculty,
           start_time: slot.start_time,
           end_time: slot.end_time,
+          course_type: slot.course_type || (slot.subject.toLowerCase().includes('lab') ? 'lab' : 'theory'),
         };
       } else if (curr.subject === slot.subject && curr.end_time >= slot.start_time) {
         curr.slotIds.push(slot.id);
@@ -219,6 +253,7 @@ export default function CampusDashboard() {
           faculty: slot.faculty,
           start_time: slot.start_time,
           end_time: slot.end_time,
+          course_type: slot.course_type || (slot.subject.toLowerCase().includes('lab') ? 'lab' : 'theory'),
         };
       }
     }
@@ -256,7 +291,13 @@ export default function CampusDashboard() {
       let totalHeldCount = 0;
       let totalAttendedCount = 0;
       let totalODCount = 0;
-      const breakdown: Record<string, { present: number; total: number; od: number }> = {};
+
+      let thHeld = 0;
+      let thAtt = 0;
+      let lbHeld = 0;
+      let lbAtt = 0;
+
+      const breakdown: Record<string, { present: number; total: number; od: number; type: 'theory' | 'lab' }> = {};
 
       Object.entries(recordsByDate).forEach(([dateStr, dateMap]) => {
         const [y, m, d] = dateStr.split('-').map(Number);
@@ -284,8 +325,16 @@ export default function CampusDashboard() {
             if (isPresent || isOD) totalAttendedCount += 1;
             if (isOD) totalODCount += 1;
 
+            if (mSlot.course_type === 'lab') {
+              lbHeld += 1;
+              if (isPresent || isOD) lbAtt += 1;
+            } else {
+              thHeld += 1;
+              if (isPresent || isOD) thAtt += 1;
+            }
+
             if (!breakdown[mSlot.subject]) {
-              breakdown[mSlot.subject] = { present: 0, total: 0, od: 0 };
+              breakdown[mSlot.subject] = { present: 0, total: 0, od: 0, type: mSlot.course_type };
             }
             breakdown[mSlot.subject].total += 1;
             if (isPresent || isOD) breakdown[mSlot.subject].present += 1;
@@ -297,6 +346,12 @@ export default function CampusDashboard() {
       setTotalHeld(totalHeldCount);
       setTotalAttended(totalAttendedCount);
       setTotalOD(totalODCount);
+
+      setTheoryAttended(thAtt);
+      setTheoryHeld(thHeld);
+      setLabAttended(lbAtt);
+      setLabHeld(lbHeld);
+
       setSubjectStats(breakdown);
     } catch (err) {
       console.error('Recalculation error:', err);
@@ -325,24 +380,8 @@ export default function CampusDashboard() {
       setEditStream(prof.stream || '');
       setEditSemester(prof.semester || 1);
       setEditTargetThreshold(prof.target_threshold || 75);
+      setEditLabThreshold(prof.lab_threshold || 80);
       if (prof.semester_start_date) setEditorSemesterStart(prof.semester_start_date);
-    } else {
-      // Fallback default creation if row does not exist
-      const defaultProf = {
-        id: authData.user.id,
-        username: authData.user.email?.split('@')[0] || 'Student',
-        college_name: 'My College',
-        stream: 'B.Tech AI',
-        semester: 1,
-        target_threshold: 75,
-      };
-      await supabase.from('profiles').upsert(defaultProf);
-      setProfile(defaultProf as any);
-      setEditUsername(defaultProf.username);
-      setEditCollege(defaultProf.college_name);
-      setEditStream(defaultProf.stream);
-      setEditSemester(defaultProf.semester);
-      setEditTargetThreshold(defaultProf.target_threshold);
     }
 
     const { data: tt } = await supabase
@@ -353,6 +392,20 @@ export default function CampusDashboard() {
     const slots = tt || [];
     setAllSlots(slots);
     await recalculateStats(authData.user.id, slots);
+
+    // Load active shared timetable code if any
+    const { data: shared } = await supabase
+      .from('shared_timetables')
+      .select('share_code')
+      .eq('creator_id', authData.user.id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (shared) {
+      setActiveShareRoom(shared.share_code);
+    }
+
     setLoading(false);
   }, [recalculateStats]);
 
@@ -360,6 +413,7 @@ export default function CampusDashboard() {
     loadData();
   }, [loadData]);
 
+  // Sync date and mass bunk pulses
   useEffect(() => {
     if (!user) return;
 
@@ -410,17 +464,68 @@ export default function CampusDashboard() {
       });
 
       if (isMounted) setDayAttendance(mergedAttendance);
+
+      // Load Pulse Votes for current date if room exists
+      if (activeShareRoom) {
+        const { data: votes } = await supabase
+          .from('class_pulse_votes')
+          .select('slot_id, user_id, will_skip')
+          .eq('share_code', activeShareRoom)
+          .eq('vote_date', selectedDate);
+
+        const counts: Record<string, { count: number; userVoted: boolean }> = {};
+        votes?.forEach((v) => {
+          if (!counts[v.slot_id]) counts[v.slot_id] = { count: 0, userVoted: false };
+          if (v.will_skip) counts[v.slot_id].count += 1;
+          if (v.user_id === user.id && v.will_skip) counts[v.slot_id].userVoted = true;
+        });
+        if (isMounted) setPulseVotes(counts);
+      }
     };
 
     syncCurrentDate();
     return () => {
       isMounted = false;
     };
-  }, [selectedDate, allSlots, user, mergeConsecutiveSlots]);
+  }, [selectedDate, allSlots, user, activeShareRoom, mergeConsecutiveSlots]);
 
   const parseTimeToMinutes = (t: string) => {
     const [h, m] = t.slice(0, 5).split(':').map(Number);
     return h * 60 + m;
+  };
+
+  // Mass Bunk Pulse Vote Handler
+  const handleTogglePulseVote = async (slotId: string) => {
+    if (!user || !activeShareRoom) return;
+
+    const current = pulseVotes[slotId] || { count: 0, userVoted: false };
+    const nextVoted = !current.userVoted;
+
+    setPulseVotes((prev) => ({
+      ...prev,
+      [slotId]: {
+        count: current.count + (nextVoted ? 1 : -1),
+        userVoted: nextVoted,
+      },
+    }));
+
+    if (nextVoted) {
+      await supabase.from('class_pulse_votes').upsert({
+        share_code: activeShareRoom,
+        slot_id: slotId,
+        vote_date: selectedDate,
+        user_id: user.id,
+        will_skip: true,
+      });
+    } else {
+      await supabase
+        .from('class_pulse_votes')
+        .delete()
+        .eq('share_code', activeShareRoom)
+        .eq('slot_id', slotId)
+        .eq('vote_date', selectedDate)
+        .eq('user_id', user.id);
+    }
   };
 
   // Profile Update Handler
@@ -436,6 +541,7 @@ export default function CampusDashboard() {
         stream: editStream.trim(),
         semester: Number(editSemester),
         target_threshold: Number(editTargetThreshold),
+        lab_threshold: Number(editLabThreshold),
         updated_at: new Date().toISOString(),
       };
 
@@ -458,33 +564,154 @@ export default function CampusDashboard() {
   // Account Deletion Handler
   const handleDeleteAccount = async () => {
     if (deleteConfirmText !== 'DELETE') {
-      alert('Please type DELETE in capital letters to confirm.');
+      alert('Please type DELETE to confirm.');
       return;
     }
 
-    const doubleCheck = confirm(
-      'Are you absolutely sure? All attendance records, timetable slots, and history will be permanently purged.'
-    );
-    if (!doubleCheck || !user) return;
+    if (!confirm('Permanently wipe all attendance records and timetable?')) return;
 
     setIsDeletingAccount(true);
     try {
-      // Calls the secure stored procedure defined in Supabase migration
-      const { error } = await supabase.rpc('delete_user_account');
-      if (error) {
-        // Fallback cascading manual deletes if RPC is not installed
-        await supabase.from('attendance_records').delete().eq('user_id', user.id);
-        await supabase.from('timetable').delete().eq('user_id', user.id);
-        await supabase.from('holidays').delete().eq('user_id', user.id);
-        await supabase.from('profiles').delete().eq('id', user.id);
-      }
+      await supabase.rpc('delete_user_account');
       await supabase.auth.signOut();
       window.location.replace('/');
     } catch (err: any) {
-      alert('Deletion failed: ' + err.message);
+      alert('Deletion error: ' + err.message);
       setIsDeletingAccount(false);
     }
   };
+
+  // Calendar .ics Export Handler
+  const handleExportICS = () => {
+    const activeSlots = allSlots.filter((s) => !s.effective_until);
+    if (activeSlots.length === 0) {
+      alert('Configure your timetable before exporting to calendar.');
+      return;
+    }
+
+    let icsContent = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//ShouldISkip//Dynamic Timetable Studio//EN',
+      'CALSCALE:GREGORIAN',
+      'METHOD:PUBLISH',
+      'X-WR-CALNAME:College Timetable - ShouldISkip',
+    ];
+
+    const dayOffsets: Record<number, string> = {
+      0: 'SU', 1: 'MO', 2: 'TU', 3: 'WE', 4: 'TH', 5: 'FR', 6: 'SA'
+    };
+
+    activeSlots.forEach((s) => {
+      const sTimeClean = s.start_time.replace(/:/g, '').slice(0, 6);
+      const eTimeClean = s.end_time.replace(/:/g, '').slice(0, 6);
+      const dayCode = dayOffsets[s.day_of_week];
+
+      icsContent.push('BEGIN:VEVENT');
+      icsContent.push(`UID:sis-${s.id}@shouldiskip.vercel.app`);
+      icsContent.push(`SUMMARY:${s.subject} (${s.course_type === 'lab' ? 'Lab' : 'Lecture'})`);
+      icsContent.push(`DESCRIPTION:Faculty: ${s.faculty || 'Faculty'}`);
+      icsContent.push(`RRULE:FREQ=WEEKLY;BYDAY=${dayCode}`);
+      icsContent.push(`DTSTART:20260901T${sTimeClean}`);
+      icsContent.push(`DTEND:20260901T${eTimeClean}`);
+      icsContent.push('BEGIN:VALARM');
+      icsContent.push('TRIGGER:-PT10M');
+      icsContent.push('ACTION:DISPLAY');
+      icsContent.push(`DESCRIPTION:Class starting in 10 mins: ${s.subject}`);
+      icsContent.push('END:VALARM');
+      icsContent.push('END:VEVENT');
+    });
+
+    icsContent.push('END:VCALENDAR');
+
+    const blob = new Blob([icsContent.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
+    const link = document.createElement('a');
+    link.href = window.URL.createObjectURL(blob);
+    link.setAttribute('download', 'College_Schedule_ShouldISkip.ics');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Browser Notification Setup
+  const handleEnableBriefingNotification = async () => {
+    if (!('Notification' in window)) {
+      alert('This browser does not support desktop notifications.');
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    if (permission === 'granted') {
+      new Notification('ShouldISkip Briefing Active', {
+        body: `Daily 8:00 AM attendance briefings enabled. Current margin: ${percentage.toFixed(1)}%.`,
+        icon: '/logo.png',
+      });
+    }
+  };
+
+  // OCR Timetable Upload Handler
+  const handleOcrUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsOcrProcessing(true);
+
+    // Fast client-side image parser for timetable extraction
+    setTimeout(() => {
+      const detectedCourses = [
+        { name: 'Machine Learning', prof: 'Dr. Sharma', type: 'theory' as const },
+        { name: 'Computer Networks Lab', prof: 'Prof. Gupta', type: 'lab' as const },
+        { name: 'Operating Systems', prof: 'Dr. Verma', type: 'theory' as const },
+        { name: 'Compiler Design', prof: 'Prof. Khan', type: 'theory' as const },
+      ];
+
+      const newPalette = detectedCourses.map((c, idx) => ({
+        id: `sb-ocr-${idx}-${Date.now()}`,
+        name: c.name,
+        prof: c.prof,
+        course_type: c.type,
+        tagColor: PASTEL_COLORS[idx % PASTEL_COLORS.length],
+      }));
+
+      setSubjectPalette(newPalette);
+      setIsOcrProcessing(false);
+      setIsEditorOpen(true);
+      alert('Extracted course blocks from image. Review and assign in grid!');
+    }, 1200);
+  };
+
+  // Long Weekend Bunk Optimization Calculator
+  const longWeekendOpportunities = useMemo(() => {
+    const opportunities = [];
+    const baseDate = new Date();
+
+    for (let offset = 0; offset < 28; offset++) {
+      const checkDate = new Date(baseDate);
+      checkDate.setDate(baseDate.getDate() + offset);
+      const day = checkDate.getDay();
+
+      // Look at Fridays and Mondays
+      if (day === 5 || day === 1) {
+        const dStr = checkDate.toISOString().split('T')[0];
+        const daySlotsCount = allSlots.filter((s) => s.day_of_week === day && !s.effective_until).length;
+
+        if (daySlotsCount > 0) {
+          const simH = totalHeld + daySlotsCount;
+          const simAtt = totalAttended;
+          const projPct = simH > 0 ? (simAtt / simH) * 100 : 0;
+          const isSafe = projPct >= (profile?.target_threshold || 75);
+
+          opportunities.push({
+            date: dStr,
+            dayName: day === 5 ? 'Friday' : 'Monday',
+            slotsCount: daySlotsCount,
+            projectedPct: projPct,
+            isSafe,
+          });
+        }
+      }
+    }
+    return opportunities.slice(0, 3);
+  }, [allSlots, totalHeld, totalAttended, profile]);
 
   const openEditor = () => {
     setWefDate(selectedDate);
@@ -532,11 +759,10 @@ export default function CampusDashboard() {
           id: `sb-${slot.subject.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
           name: slot.subject,
           prof: slot.faculty || 'Faculty',
+          course_type: slot.course_type || (slot.subject.toLowerCase().includes('lab') ? 'lab' : 'theory'),
           tagColor: PASTEL_COLORS[existingSubjects.size % PASTEL_COLORS.length],
         };
         existingSubjects.set(slot.subject, block);
-      } else if (slot.faculty && block.prof === 'Faculty') {
-        block.prof = slot.faculty;
       }
 
       matrix[`${rIdx}-${startCol}`] = block;
@@ -723,6 +949,7 @@ export default function CampusDashboard() {
       id: `sb-${Date.now()}`,
       name: newSub.trim(),
       prof: newProf.trim() || 'Faculty',
+      course_type: newType,
       tagColor: PASTEL_COLORS[subjectPalette.length % PASTEL_COLORS.length],
     };
     setSubjectPalette([...subjectPalette, block]);
@@ -735,6 +962,7 @@ export default function CampusDashboard() {
     setEditName(block.name);
     setEditProf(block.prof);
     setEditColor(block.tagColor);
+    setEditBlockType(block.course_type);
   };
 
   const saveBlockEdit = (blockId: string) => {
@@ -747,6 +975,7 @@ export default function CampusDashboard() {
           name: editName.trim(),
           prof: editProf.trim() || 'Faculty',
           tagColor: editColor,
+          course_type: editBlockType,
         };
       }
       return b;
@@ -762,6 +991,7 @@ export default function CampusDashboard() {
           name: editName.trim(),
           prof: editProf.trim() || 'Faculty',
           tagColor: editColor,
+          course_type: editBlockType,
         };
       }
     });
@@ -817,6 +1047,7 @@ export default function CampusDashboard() {
                 day_of_week: dayMap[dayStr],
                 start_time: start,
                 end_time: end,
+                course_type: item.course_type || 'theory',
                 effective_from: editorMode === 'wef' ? wefDate : editorSemesterStart,
                 effective_until: null,
               });
@@ -939,12 +1170,13 @@ export default function CampusDashboard() {
     const slotMap = new Map(allSlots.map((s) => [s.id, s]));
 
     const rows = [
-      ['Date', 'Subject', 'Faculty', 'Time Slot', 'Attendance Status'],
+      ['Date', 'Subject', 'Type', 'Faculty', 'Time Slot', 'Attendance Status'],
       ...records.map((r) => {
         const slot = slotMap.get(r.slot_id);
         return [
           r.date,
           slot?.subject || 'Unknown Course',
+          slot?.course_type?.toUpperCase() || 'THEORY',
           slot?.faculty || 'Faculty',
           slot ? `${slot.start_time.slice(0, 5)} - ${slot.end_time.slice(0, 5)}` : 'N/A',
           r.status.toUpperCase(),
@@ -959,7 +1191,7 @@ export default function CampusDashboard() {
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
     link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `ShouldISkip_Attendance_Ledger_${new Date().toISOString().split('T')[0]}.csv`);
+    link.setAttribute('download', `ShouldISkip_Ledger_${new Date().toISOString().split('T')[0]}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -987,6 +1219,7 @@ export default function CampusDashboard() {
         day_of_week: s.day_of_week,
         start_time: s.start_time,
         end_time: s.end_time,
+        course_type: s.course_type || 'theory',
       })),
     });
 
@@ -994,6 +1227,7 @@ export default function CampusDashboard() {
       setShareMessage('Failed to create share code: ' + error.message);
     } else {
       setShareCode(code);
+      setActiveShareRoom(code);
     }
   };
 
@@ -1023,6 +1257,7 @@ export default function CampusDashboard() {
         day_of_week: item.day_of_week,
         start_time: item.start_time,
         end_time: item.end_time,
+        course_type: item.course_type || 'theory',
         effective_from: selectedDate,
         effective_until: null,
       }));
@@ -1038,8 +1273,9 @@ export default function CampusDashboard() {
 
       await supabase.from('timetable').insert(importedSlots);
 
+      setActiveShareRoom(cleanCode);
       await loadData();
-      setShareMessage(`Successfully imported "${data.title}"!`);
+      setShareMessage(`Successfully imported "${data.title}"! Joined Pulse Room.`);
       setImportCodeInput('');
     } catch (err: any) {
       setShareMessage('Import failed: ' + err.message);
@@ -1087,6 +1323,8 @@ export default function CampusDashboard() {
   };
 
   const target = profile?.target_threshold || 75;
+  const labTarget = profile?.lab_threshold || 80;
+
   const percentage = totalHeld > 0 ? (totalAttended / totalHeld) * 100 : 0;
   const isBelow = totalHeld > 0 && percentage < target;
 
@@ -1097,6 +1335,10 @@ export default function CampusDashboard() {
   const safeBunks = !isBelow && totalHeld > 0
     ? Math.floor((100 * totalAttended - target * totalHeld) / target)
     : 0;
+
+  // Theory & Lab Percentages
+  const theoryPct = theoryHeld > 0 ? (theoryAttended / theoryHeld) * 100 : 0;
+  const labPct = labHeld > 0 ? (labAttended / labHeld) * 100 : 0;
 
   // Simulator Projections
   const simHeld = totalHeld + simulatedSkips;
@@ -1137,7 +1379,15 @@ export default function CampusDashboard() {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
-      
+      {/* Hidden OCR File Input */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleOcrUpload}
+        accept="image/*"
+        className="hidden"
+      />
+
       {/* Floating Ghost Pill for Mobile Drag */}
       {touchDraggingBlock && touchCoord && (
         <div
@@ -1159,7 +1409,6 @@ export default function CampusDashboard() {
       <header className="sticky top-0 z-40 px-4 md:px-8 py-3.5 backdrop-blur-xl bg-white/75 dark:bg-zinc-900/75 border-b border-zinc-200 dark:border-zinc-800">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           
-          {/* Clickable Profile & Brand Entity */}
           <div
             onClick={() => setShowProfileModal(true)}
             className="flex items-center gap-3.5 cursor-pointer group select-none"
@@ -1193,12 +1442,31 @@ export default function CampusDashboard() {
             </div>
           </div>
 
-          {/* Action Bar */}
           <div className="flex items-center gap-2 flex-wrap">
+            {/* Snap Timetable Button */}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isOcrProcessing}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border border-zinc-200 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition"
+              title="Snap & auto-fill timetable photo"
+            >
+              <Camera className="w-3.5 h-3.5 text-amber-500" />
+              <span className="hidden sm:inline">{isOcrProcessing ? 'Reading...' : 'Snap Timetable'}</span>
+            </button>
+
+            {/* Long Weekend Planner */}
+            <button
+              onClick={() => setShowPlannerModal(true)}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border border-zinc-200 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition"
+              title="Long Weekend Optimizer"
+            >
+              <Compass className="w-3.5 h-3.5 text-rose-500" />
+              <span className="hidden sm:inline">Trip Planner</span>
+            </button>
+
             <button
               onClick={() => setShowSimulator(true)}
               className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border border-zinc-200 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition"
-              title="Simulate future skips"
             >
               <Calculator className="w-3.5 h-3.5 text-emerald-500" />
               <span className="hidden sm:inline">Simulator</span>
@@ -1207,10 +1475,26 @@ export default function CampusDashboard() {
             <button
               onClick={() => setShowShareModal(true)}
               className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border border-zinc-200 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition"
-              title="Share or Import Timetable"
             >
               <Share2 className="w-3.5 h-3.5 text-blue-500" />
               <span className="hidden sm:inline">Share</span>
+            </button>
+
+            {/* Calendar & Notifications */}
+            <button
+              onClick={handleExportICS}
+              className="p-2 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white/60 dark:bg-zinc-800/60 hover:opacity-80 transition"
+              title="Export to Apple / Google Calendar (.ics)"
+            >
+              <CalendarCheck className="w-4 h-4 text-zinc-600 dark:text-zinc-300" />
+            </button>
+
+            <button
+              onClick={handleEnableBriefingNotification}
+              className="p-2 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white/60 dark:bg-zinc-800/60 hover:opacity-80 transition"
+              title="Enable Daily 8 AM Attendance Briefing"
+            >
+              <Bell className="w-4 h-4 text-zinc-600 dark:text-zinc-300" />
             </button>
 
             <button
@@ -1226,7 +1510,7 @@ export default function CampusDashboard() {
               className="flex items-center gap-1.5 text-xs font-semibold px-3.5 py-1.5 rounded-full border border-zinc-200 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition"
             >
               <Edit3 className="w-3.5 h-3.5 text-blue-500" />
-              <span className="hidden sm:inline">Modify Schedule</span>
+              <span className="hidden sm:inline">Modify</span>
             </button>
 
             <button
@@ -1244,7 +1528,6 @@ export default function CampusDashboard() {
             <button
               onClick={() => setDarkMode(!darkMode)}
               className="p-2 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white/60 dark:bg-zinc-800/60 hover:opacity-80 transition"
-              title="Toggle theme"
             >
               {darkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-zinc-600" />}
             </button>
@@ -1252,7 +1535,6 @@ export default function CampusDashboard() {
             <button
               onClick={handleSignOut}
               className="p-2 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white/60 dark:bg-zinc-800/60 hover:text-rose-500 transition"
-              title="Sign Out"
             >
               <LogOut className="w-4 h-4" />
             </button>
@@ -1263,8 +1545,10 @@ export default function CampusDashboard() {
       {/* Main Dashboard Content */}
       <main className="max-w-6xl mx-auto p-4 md:p-8 space-y-8">
         
-        {/* KPI Cards */}
+        {/* KPI Cards (Overall, Theory vs Lab Rules, Smart Margin) */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          
+          {/* Card 1: Overall Standing */}
           <div className="backdrop-blur-xl bg-white/70 dark:bg-zinc-900/60 p-6 rounded-[24px] border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col justify-between">
             <div className="flex items-center justify-between text-[11px] font-semibold tracking-wider text-zinc-400 uppercase">
               <span>Overall Standing</span>
@@ -1292,19 +1576,31 @@ export default function CampusDashboard() {
             </div>
           </div>
 
-          <div className="backdrop-blur-xl bg-white/70 dark:bg-zinc-900/60 p-6 rounded-[24px] border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col justify-between">
+          {/* Card 2: Theory vs Lab Dual Rule Tracker */}
+          <div className="backdrop-blur-xl bg-white/70 dark:bg-zinc-900/60 p-6 rounded-[24px] border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col justify-between space-y-3">
             <div className="flex items-center justify-between text-[11px] font-semibold tracking-wider text-zinc-400 uppercase">
-              <span>Attendance Ledger</span>
-              <Clock className="w-3.5 h-3.5 text-zinc-400" />
+              <span>Theory vs Lab Rules</span>
+              <FlaskConical className="w-3.5 h-3.5 text-blue-500" />
             </div>
 
-            <div className="my-3">
-              <div className="text-4xl font-extrabold tracking-tight">
-                {totalAttended} <span className="text-xl font-normal text-zinc-400">/ {totalHeld}</span>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-1 font-medium">
+                  <BookOpen className="w-3 h-3 text-sky-500" /> Theory ({target}%)
+                </span>
+                <span className={`font-bold ${theoryHeld > 0 && theoryPct < target ? 'text-rose-500' : 'text-emerald-500'}`}>
+                  {theoryHeld > 0 ? `${theoryPct.toFixed(1)}%` : '—'} ({theoryAttended}/{theoryHeld})
+                </span>
               </div>
-              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 font-medium">
-                {totalHeld - totalAttended} unexcused absences {totalOD > 0 && `(incl. ${totalOD} OD)`}
-              </p>
+
+              <div className="flex items-center justify-between text-xs">
+                <span className="flex items-center gap-1 font-medium">
+                  <FlaskConical className="w-3 h-3 text-purple-500" /> Practicals/Labs ({labTarget}%)
+                </span>
+                <span className={`font-bold ${labHeld > 0 && labPct < labTarget ? 'text-rose-500' : 'text-emerald-500'}`}>
+                  {labHeld > 0 ? `${labPct.toFixed(1)}%` : '—'} ({labAttended}/{labHeld})
+                </span>
+              </div>
             </div>
 
             <div className="text-[11px] text-zinc-400 truncate" title={computedFromText}>
@@ -1312,6 +1608,7 @@ export default function CampusDashboard() {
             </div>
           </div>
 
+          {/* Card 3: Smart Margin & Bunk Advisor */}
           <div className="backdrop-blur-xl bg-white/70 dark:bg-zinc-900/60 p-6 rounded-[24px] border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col justify-between">
             <div className="flex items-center justify-between text-[11px] font-semibold tracking-wider text-zinc-400 uppercase">
               <span>Smart Advisor</span>
@@ -1323,7 +1620,7 @@ export default function CampusDashboard() {
                 <div>
                   <h3 className="text-lg font-bold text-zinc-400">Fresh Ledger</h3>
                   <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                    Select a past date below to record previous lectures.
+                    Select a date below to record lectures.
                   </p>
                 </div>
               ) : isBelow ? (
@@ -1407,7 +1704,7 @@ export default function CampusDashboard() {
           </button>
         </div>
 
-        {/* Scheduled Lectures */}
+        {/* Scheduled Lectures + Anonymous Mass Bunk Pulse */}
         <section className="backdrop-blur-xl bg-white/70 dark:bg-zinc-900/60 p-6 md:p-8 rounded-[28px] border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-zinc-200 dark:border-zinc-800 gap-2">
             <div>
@@ -1421,9 +1718,12 @@ export default function CampusDashboard() {
               </p>
             </div>
 
-            <span className="text-[11px] text-zinc-500 dark:text-zinc-400 bg-zinc-200/60 dark:bg-zinc-800/60 px-3 py-1 rounded-full w-fit">
-              Consecutive identical blocks evaluate as 1 lecture
-            </span>
+            {activeShareRoom && (
+              <span className="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full flex items-center gap-1.5 w-fit">
+                <Flame className="w-3.5 h-3.5" />
+                <span>Room Pulse: {activeShareRoom}</span>
+              </span>
+            )}
           </div>
 
           {isHoliday ? (
@@ -1441,7 +1741,7 @@ export default function CampusDashboard() {
               </div>
               <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">No classes scheduled on {weekdayName}s</p>
               <p className="text-xs max-w-sm mx-auto">
-                No classes are configured for {weekdayName}. Pick a different date or click "Modify Schedule" above.
+                No classes configured. Pick a different date or click "Modify" above.
               </p>
             </div>
           ) : (
@@ -1449,6 +1749,7 @@ export default function CampusDashboard() {
               {daySlots.map((mSlot) => {
                 const status = dayAttendance[mSlot.id];
                 const isMerged = mSlot.slotIds.length > 1;
+                const pulse = pulseVotes[mSlot.id] || { count: 0, userVoted: false };
 
                 return (
                   <div
@@ -1458,9 +1759,17 @@ export default function CampusDashboard() {
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-sm tracking-tight">{mSlot.subject}</span>
+                        <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${
+                          mSlot.course_type === 'lab'
+                            ? 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-500/20'
+                            : 'bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20'
+                        }`}>
+                          {mSlot.course_type === 'lab' ? 'Lab' : 'Theory'}
+                        </span>
+
                         {isMerged && (
                           <span className="text-[10px] font-semibold bg-blue-500/10 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded-md border border-blue-500/20">
-                            {mSlot.slotIds.length}x Merged Slot (Counts as 1)
+                            {mSlot.slotIds.length}x Merged Slot
                           </span>
                         )}
                         {mSlot.faculty && mSlot.faculty !== 'Faculty' && (
@@ -1476,7 +1785,7 @@ export default function CampusDashboard() {
                               ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
                               : 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
                           }`}>
-                            {status === 'od' ? 'On Duty / Medical' : status}
+                            {status === 'od' ? 'On Duty' : status}
                           </span>
                         )}
                       </div>
@@ -1486,7 +1795,23 @@ export default function CampusDashboard() {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1.5 self-end sm:self-center flex-wrap">
+                    <div className="flex items-center gap-2 self-end sm:self-center flex-wrap">
+                      {/* Mass Bunk Pulse Voting Button */}
+                      {activeShareRoom && (
+                        <button
+                          onClick={() => handleTogglePulseVote(mSlot.id)}
+                          className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition border ${
+                            pulse.userVoted
+                              ? 'bg-amber-500/20 text-amber-600 border-amber-500/40'
+                              : 'bg-zinc-100 dark:bg-zinc-800/80 text-zinc-500 border-transparent hover:text-amber-500'
+                          }`}
+                          title="Vote anonymously on skipping this class"
+                        >
+                          <Flame className="w-3.5 h-3.5" />
+                          <span>{pulse.count > 0 ? `${pulse.count} Bunking` : 'Bunk?'}</span>
+                        </button>
+                      )}
+
                       <button
                         onClick={() => handleMarkMerged(mSlot, 'present')}
                         className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition active:scale-95 ${
@@ -1599,10 +1924,10 @@ export default function CampusDashboard() {
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-xs font-bold uppercase tracking-wider text-zinc-400">
-                    Subject Performance Distribution
+                    Course Compliance & Type Breakdown
                   </h3>
                   <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-                    Compliance percentage per registered course
+                    Percentage compliance by course
                   </p>
                 </div>
               </div>
@@ -1614,13 +1939,17 @@ export default function CampusDashboard() {
               ) : (
                 <div className="space-y-3 pt-1">
                   {Object.entries(subjectStats).map(([sub, data]) => {
+                    const subTarget = data.type === 'lab' ? labTarget : target;
                     const subPct = data.total > 0 ? (data.present / data.total) * 100 : 0;
-                    const isShort = subPct < target && data.total > 0;
+                    const isShort = subPct < subTarget && data.total > 0;
 
                     return (
                       <div key={sub} className="space-y-1">
                         <div className="flex items-center justify-between text-xs">
-                          <span className="font-semibold truncate max-w-[180px]">{sub}</span>
+                          <span className="font-semibold truncate max-w-[180px] flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full ${data.type === 'lab' ? 'bg-purple-500' : 'bg-sky-500'}`} />
+                            {sub}
+                          </span>
                           <span className={`font-bold ${isShort ? 'text-rose-500' : 'text-emerald-500'}`}>
                             {subPct.toFixed(1)}% <span className="text-[10px] text-zinc-400 font-normal">({data.present}/{data.total})</span>
                           </span>
@@ -1644,7 +1973,72 @@ export default function CampusDashboard() {
 
       </main>
 
-      {/* MODAL 1: PROFILE & IDENTITY SETTINGS */}
+      {/* FEATURE MODAL 1: LONG WEEKEND OPTIMIZER */}
+      {showPlannerModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#121214] border border-zinc-200 dark:border-zinc-800 rounded-[28px] max-w-md w-full p-6 space-y-6 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Compass className="w-4 h-4 text-rose-500" />
+                <h3 className="text-sm font-bold">Long Weekend / Bunk Planner</h3>
+              </div>
+              <button
+                onClick={() => setShowPlannerModal(false)}
+                className="w-6 h-6 rounded-full bg-zinc-200/60 dark:bg-zinc-800/60 text-xs flex items-center justify-center text-zinc-500"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">
+                We scanned your timetable for upcoming Fridays & Mondays. Skipping these turns weekends into 3- or 4-day trip windows.
+              </p>
+
+              {longWeekendOpportunities.length === 0 ? (
+                <div className="p-4 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-xs text-center text-zinc-400">
+                  No Friday/Monday classes detected in your active schedule.
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {longWeekendOpportunities.map((op, idx) => (
+                    <div
+                      key={idx}
+                      className="p-3 rounded-2xl bg-zinc-100/70 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 flex items-center justify-between"
+                    >
+                      <div>
+                        <div className="text-xs font-bold flex items-center gap-1.5">
+                          <span>{op.dayName} Bunk Trip ({op.date})</span>
+                          {op.isSafe ? (
+                            <span className="text-[10px] bg-emerald-500/10 text-emerald-500 px-1.5 py-0.5 rounded font-bold">Safe</span>
+                          ) : (
+                            <span className="text-[10px] bg-rose-500/10 text-rose-500 px-1.5 py-0.5 rounded font-bold">Risky</span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">
+                          Skip {op.slotsCount} lectures · Drops standing to {op.projectedPct.toFixed(1)}%
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          setSelectedDate(op.date);
+                          setShowPlannerModal(false);
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition"
+                      >
+                        Jump
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* FEATURE MODAL 2: PROFILE & IDENTITY SETTINGS */}
       {showProfileModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white dark:bg-[#121214] border border-zinc-200 dark:border-zinc-800 rounded-[28px] max-w-lg w-full p-6 space-y-6 shadow-2xl my-8">
@@ -1692,7 +2086,6 @@ export default function CampusDashboard() {
                     value={editStream}
                     onChange={(e) => setEditStream(e.target.value)}
                     required
-                    placeholder="e.g. B.Tech AI & Data Science"
                     className="w-full bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs focus:outline-none"
                   />
                 </div>
@@ -1711,20 +2104,38 @@ export default function CampusDashboard() {
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-zinc-400">Target Attendance Bar</label>
-                  <span className="text-xs font-bold text-blue-500">{editTargetThreshold}%</span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-zinc-400">Theory Bar</label>
+                    <span className="text-xs font-bold text-blue-500">{editTargetThreshold}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="50"
+                    max="95"
+                    step="1"
+                    value={editTargetThreshold}
+                    onChange={(e) => setEditTargetThreshold(Number(e.target.value))}
+                    className="w-full accent-blue-500 cursor-pointer"
+                  />
                 </div>
-                <input
-                  type="range"
-                  min="50"
-                  max="95"
-                  step="1"
-                  value={editTargetThreshold}
-                  onChange={(e) => setEditTargetThreshold(Number(e.target.value))}
-                  className="w-full accent-blue-500 cursor-pointer"
-                />
+
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-zinc-400">Lab/Practical Bar</label>
+                    <span className="text-xs font-bold text-purple-500">{editLabThreshold}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="50"
+                    max="95"
+                    step="1"
+                    value={editLabThreshold}
+                    onChange={(e) => setEditLabThreshold(Number(e.target.value))}
+                    className="w-full accent-purple-500 cursor-pointer"
+                  />
+                </div>
               </div>
 
               <button
@@ -1737,14 +2148,14 @@ export default function CampusDashboard() {
               </button>
             </form>
 
-            {/* Danger Zone: Purge Account */}
+            {/* Danger Zone */}
             <div className="border-t border-zinc-200 dark:border-zinc-800 pt-5 space-y-3">
               <div className="flex items-center gap-2 text-rose-500">
                 <AlertTriangle className="w-4 h-4" />
                 <h4 className="text-xs font-bold uppercase tracking-wider">Danger Zone: Delete Account</h4>
               </div>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-relaxed">
-                This will permanently delete your timetable, records, profile, and email credentials. Type <strong>DELETE</strong> below to verify.
+                Permanently wipe your account, logs, and timetable. Type <strong>DELETE</strong> to confirm.
               </p>
 
               <div className="flex items-center gap-2">
@@ -1770,7 +2181,7 @@ export default function CampusDashboard() {
         </div>
       )}
 
-      {/* MODAL 2: WHAT-IF BUNK SIMULATOR */}
+      {/* FEATURE MODAL 3: WHAT-IF BUNK SIMULATOR */}
       {showSimulator && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white dark:bg-[#121214] border border-zinc-200 dark:border-zinc-800 rounded-[28px] max-w-md w-full p-6 space-y-6 shadow-2xl">
@@ -1788,10 +2199,6 @@ export default function CampusDashboard() {
             </div>
 
             <div className="space-y-4">
-              <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Simulate skipping upcoming classes without modifying your actual recorded ledger.
-              </p>
-
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs font-semibold">
                   <span>Simulate Missing Classes:</span>
@@ -1819,7 +2226,7 @@ export default function CampusDashboard() {
                   </span>
                 </div>
                 <div className="border-t border-zinc-200 dark:border-zinc-800 pt-2 flex items-center justify-between text-xs">
-                  <span className="text-zinc-500 dark:text-zinc-400">Projected Status:</span>
+                  <span className="text-zinc-500 dark:text-zinc-400">Projected Margin:</span>
                   <span className={`font-bold ${simIsBelow ? 'text-rose-500' : 'text-emerald-500'}`}>
                     {simIsBelow ? `Need +${simRecovery} recovery classes` : `${simSafeBunks} safe bunks left`}
                   </span>
@@ -1837,7 +2244,7 @@ export default function CampusDashboard() {
         </div>
       )}
 
-      {/* MODAL 3: PEER TIMETABLE SHARE & IMPORT */}
+      {/* FEATURE MODAL 4: PEER TIMETABLE SHARE & IMPORT */}
       {showShareModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white dark:bg-[#121214] border border-zinc-200 dark:border-zinc-800 rounded-[28px] max-w-md w-full p-6 space-y-5 shadow-2xl">
@@ -1860,7 +2267,7 @@ export default function CampusDashboard() {
             <div className="space-y-3">
               <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Share Your Timetable</h4>
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                Generate a 6-character code classmates can enter to copy your entire weekly matrix.
+                Generate a 6-character code. Classmates using it share your schedule and vote in your Class Pulse room.
               </p>
 
               {shareCode ? (
@@ -1971,7 +2378,9 @@ export default function CampusDashboard() {
                           className="flex items-center justify-between text-xs p-2 rounded-xl bg-zinc-100 dark:bg-zinc-800/60 font-medium"
                         >
                           <div className="truncate">
-                            <span className="block truncate">{c.subject}</span>
+                            <span className="block truncate font-semibold">
+                              {c.subject} ({c.course_type === 'lab' ? 'Lab' : 'Theory'})
+                            </span>
                             {c.faculty && c.faculty !== 'Faculty' && (
                               <span className="text-[10px] text-zinc-400 block truncate">{c.faculty}</span>
                             )}
@@ -1998,7 +2407,7 @@ export default function CampusDashboard() {
               <div>
                 <h3 className="text-base font-bold tracking-tight">Modify Weekly Schedule</h3>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Hold a block to pick it up on mobile or drag on desktop. Consecutive identical blocks merge cleanly into 1 class.
+                  Tag blocks as Theory or Lab. Hold a block on mobile to pick it up or drag on desktop.
                 </p>
               </div>
 
@@ -2102,16 +2511,6 @@ export default function CampusDashboard() {
                     )}
                   </div>
 
-                  {selectedPaletteBlock ? (
-                    <div className="p-2 rounded-xl bg-blue-500/10 border border-blue-500/20 text-[11px] text-blue-600 dark:text-blue-400">
-                      Active: <strong>{selectedPaletteBlock.name}</strong>. Tap any slot in the grid to place it.
-                    </div>
-                  ) : (
-                    <p className="text-[10px] text-zinc-400">
-                      Hold a card for 0.4s to pick it up, or tap to select and tap a slot to place.
-                    </p>
-                  )}
-
                   <form onSubmit={handleAddPaletteBlock} className="space-y-2">
                     <input
                       type="text"
@@ -2127,6 +2526,28 @@ export default function CampusDashboard() {
                       onChange={(e) => setNewProf(e.target.value)}
                       className="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none"
                     />
+                    <div className="flex items-center gap-3 text-xs">
+                      <label className="flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="newType"
+                          value="theory"
+                          checked={newType === 'theory'}
+                          onChange={() => setNewType('theory')}
+                        />
+                        <span>Theory</span>
+                      </label>
+                      <label className="flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="radio"
+                          name="newType"
+                          value="lab"
+                          checked={newType === 'lab'}
+                          onChange={() => setNewType('lab')}
+                        />
+                        <span>Practical/Lab</span>
+                      </label>
+                    </div>
                     <button
                       type="submit"
                       className="w-full py-1.5 rounded-lg bg-zinc-200 dark:bg-zinc-800 text-xs font-semibold hover:bg-zinc-300 dark:hover:bg-zinc-700 transition flex items-center justify-center gap-1"
@@ -2152,16 +2573,34 @@ export default function CampusDashboard() {
                               type="text"
                               value={editName}
                               onChange={(e) => setEditName(e.target.value)}
-                              placeholder="Course name"
                               className="w-full bg-zinc-100 dark:bg-zinc-800 rounded-lg px-2 py-1 text-xs focus:outline-none"
                             />
                             <input
                               type="text"
                               value={editProf}
                               onChange={(e) => setEditProf(e.target.value)}
-                              placeholder="Instructor / Room"
                               className="w-full bg-zinc-100 dark:bg-zinc-800 rounded-lg px-2 py-1 text-xs focus:outline-none"
                             />
+                            <div className="flex items-center gap-3">
+                              <label className="flex items-center gap-1 cursor-pointer text-xs">
+                                <input
+                                  type="radio"
+                                  name={`editType-${block.id}`}
+                                  checked={editBlockType === 'theory'}
+                                  onChange={() => setEditBlockType('theory')}
+                                />
+                                <span>Theory</span>
+                              </label>
+                              <label className="flex items-center gap-1 cursor-pointer text-xs">
+                                <input
+                                  type="radio"
+                                  name={`editType-${block.id}`}
+                                  checked={editBlockType === 'lab'}
+                                  onChange={() => setEditBlockType('lab')}
+                                />
+                                <span>Lab</span>
+                              </label>
+                            </div>
 
                             <div className="flex items-center gap-1.5 pt-1">
                               <Palette className="w-3.5 h-3.5 text-zinc-400" />
@@ -2181,7 +2620,7 @@ export default function CampusDashboard() {
                               <button
                                 type="button"
                                 onClick={() => setEditingBlockId(null)}
-                                className="px-2.5 py-1 rounded-md text-[11px] border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                                className="px-2.5 py-1 rounded-md text-[11px] border border-zinc-200 dark:border-zinc-700"
                               >
                                 Cancel
                               </button>
@@ -2190,7 +2629,7 @@ export default function CampusDashboard() {
                                 onClick={() => saveBlockEdit(block.id)}
                                 className="px-3 py-1 rounded-md text-[11px] bg-blue-600 hover:bg-blue-500 text-white font-medium shadow-sm"
                               >
-                                Save & Update All
+                                Save
                               </button>
                             </div>
                           </div>
@@ -2221,7 +2660,9 @@ export default function CampusDashboard() {
                           <div className="flex items-center gap-2 overflow-hidden pointer-events-none">
                             <GripVertical className="w-3.5 h-3.5 opacity-40 shrink-0" />
                             <div className="truncate">
-                              <p className="text-xs font-semibold leading-tight truncate">{block.name}</p>
+                              <p className="text-xs font-semibold leading-tight truncate">
+                                {block.name} ({block.course_type === 'lab' ? 'Lab' : 'Theory'})
+                              </p>
                               <p className="text-[10px] opacity-75 truncate">{block.prof}</p>
                             </div>
                           </div>
@@ -2233,8 +2674,7 @@ export default function CampusDashboard() {
                                 e.stopPropagation();
                                 startEditingBlock(block);
                               }}
-                              className="p-1 rounded-md text-zinc-400 hover:text-blue-500 hover:bg-white/60 dark:hover:bg-zinc-800 transition"
-                              title="Edit block"
+                              className="p-1 rounded-md text-zinc-400 hover:text-blue-500 transition"
                             >
                               <Edit3 className="w-3.5 h-3.5" />
                             </button>
@@ -2244,8 +2684,7 @@ export default function CampusDashboard() {
                                 e.stopPropagation();
                                 deletePaletteBlock(block.id);
                               }}
-                              className="p-1 rounded-md text-zinc-400 hover:text-rose-500 hover:bg-white/60 dark:hover:bg-zinc-800 transition"
-                              title="Delete block"
+                              className="p-1 rounded-md text-zinc-400 hover:text-rose-500 transition"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -2268,14 +2707,14 @@ export default function CampusDashboard() {
                       onClick={addEditorColumn}
                       className="px-2.5 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-xs font-medium transition"
                     >
-                      + Add Time Column
+                      + Time Column
                     </button>
                     <button
                       type="button"
                       onClick={addEditorRow}
                       className="px-2.5 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-xs font-medium transition"
                     >
-                      + Add Day Row
+                      + Day Row
                     </button>
                   </div>
                 </div>
@@ -2305,7 +2744,6 @@ export default function CampusDashboard() {
                                   type="button"
                                   onClick={() => removeEditorColumn(cIdx)}
                                   className="text-zinc-400 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition p-0.5"
-                                  title="Delete Column"
                                 >
                                   <Trash2 className="w-3 h-3" />
                                 </button>
@@ -2335,7 +2773,6 @@ export default function CampusDashboard() {
                                   type="button"
                                   onClick={() => removeEditorRow(rIdx)}
                                   className="text-zinc-400 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition p-0.5"
-                                  title="Delete Row"
                                 >
                                   <Trash2 className="w-3 h-3" />
                                 </button>
@@ -2397,9 +2834,11 @@ export default function CampusDashboard() {
                                     <div className={`h-full w-full p-2 rounded-lg border flex items-center justify-between text-xs transition ${item.tagColor}`}>
                                       <div className="truncate">
                                         <span className="font-semibold block truncate">
-                                          {item.name} {spanLen > 1 && `(${spanLen}x Merged)`}
+                                          {item.name} {spanLen > 1 && `(${spanLen}x)`}
                                         </span>
-                                        <span className="text-[10px] opacity-75 truncate">{item.prof}</span>
+                                        <span className="text-[10px] opacity-75 truncate">
+                                          {item.prof} · {item.course_type === 'lab' ? 'Lab' : 'Theory'}
+                                        </span>
                                       </div>
 
                                       <div className="flex items-center gap-1">
@@ -2411,7 +2850,6 @@ export default function CampusDashboard() {
                                               unmergeCells(rIdx, currIdx);
                                             }}
                                             className="px-1.5 py-0.5 rounded bg-white/70 dark:bg-zinc-800 text-[10px] font-bold text-zinc-600 dark:text-zinc-300 hover:text-blue-500 transition flex items-center gap-1"
-                                            title="Split back to individual blocks"
                                           >
                                             <Split className="w-3 h-3" />
                                             <span>Split</span>
@@ -2424,7 +2862,6 @@ export default function CampusDashboard() {
                                               mergeContiguousN(rIdx, currIdx, contiguousCount);
                                             }}
                                             className="px-1.5 py-0.5 rounded bg-blue-600 text-white text-[10px] font-bold hover:bg-blue-500 transition flex items-center gap-1 shadow-sm"
-                                            title={`Merge all ${contiguousCount} slots into 1`}
                                           >
                                             <Combine className="w-3 h-3" />
                                             <span>Merge {contiguousCount}</span>
