@@ -1,0 +1,52 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ios-bg: #f2f2f7;
+  --ios-card: rgba(255, 255, 255, 0.75);
+  --ios-card-solid: #ffffff;
+  --ios-border: rgba(0, 0, 0, 0.08);
+  --ios-text: #000000;
+  --ios-subtext: #8e8e93;
+  --ios-system-gray: #e5e5ea;
+  --ios-blue: #007aff;
+  --ios-green: #34c759;
+  --ios-red: #ff3b30;
+  --ios-orange: #ff9500;
+}
+
+.dark {
+  --ios-bg: #000000;
+  --ios-card: rgba(28, 28, 30, 0.72);
+  --ios-card-solid: #1c1c1e;
+  --ios-border: rgba(255, 255, 255, 0.12);
+  --ios-text: #ffffff;
+  --ios-subtext: #8e8e93;
+  --ios-system-gray: #2c2c2e;
+  --ios-blue: #0a84ff;
+  --ios-green: #30d158;
+  --ios-red: #ff453a;
+  --ios-orange: #ff9f0a;
+}
+
+body {
+  background-color: var(--ios-bg);
+  color: var(--ios-text);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow-x: hidden;
+}
+
+.ios-glass {
+  background: var(--ios-card);
+  backdrop-filter: blur(25px) saturate(190%);
+  -webkit-backdrop-filter: blur(25px) saturate(190%);
+  border: 1px solid var(--ios-border);
+}
+
+.ios-glass-solid {
+  background: var(--ios-card-solid);
+  border: 1px solid var(--ios-border);
+}
