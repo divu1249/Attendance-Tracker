@@ -138,10 +138,14 @@ export default function CampusDashboard() {
   const [editProf, setEditProf] = useState('');
   const [editColor, setEditColor] = useState('');
 
-  // Mobile/Desktop Drag & Tap States
+  // Enhanced Mobile Long-Press Drag & Tap States
   const [selectedPaletteBlock, setSelectedPaletteBlock] = useState<SubjectBlock | null>(null);
   const [touchDraggingBlock, setTouchDraggingBlock] = useState<SubjectBlock | null>(null);
   const [touchCoord, setTouchCoord] = useState<{ x: number; y: number } | null>(null);
+  const [hoveredCellCoord, setHoveredCellCoord] = useState<string | null>(null);
+  const [isLongPressing, setIsLongPressing] = useState<string | null>(null);
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const touchStartPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   useEffect(() => {
     const root = document.documentElement;
@@ -509,41 +513,76 @@ export default function CampusDashboard() {
     }
   };
 
-  // Mobile Touch Drag Engine
+  // Touch Drag Engine with Long-Press Detection
   const handleTouchStart = (e: React.TouchEvent, block: SubjectBlock) => {
     const touch = e.touches[0];
-    setTouchDraggingBlock(block);
-    setTouchCoord({ x: touch.clientX, y: touch.clientY });
+    touchStartPos.current = { x: touch.clientX, y: touch.clientY };
+    setIsLongPressing(block.id);
+
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+
+    longPressTimerRef.current = setTimeout(() => {
+      if (typeof window !== 'undefined' && window.navigator && window.navigator.vibrate) {
+        window.navigator.vibrate(40);
+      }
+      setTouchDraggingBlock(block);
+      setTouchCoord({ x: touch.clientX, y: touch.clientY });
+      setIsLongPressing(null);
+    }, 450);
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
-    if (!touchDraggingBlock) return;
     const touch = e.touches[0];
-    setTouchCoord({ x: touch.clientX, y: touch.clientY });
-  };
 
-  const handleTouchEnd = () => {
-    if (!touchDraggingBlock || !touchCoord) {
-      setTouchDraggingBlock(null);
-      setTouchCoord(null);
+    if (!touchDraggingBlock) {
+      const dist = Math.hypot(
+        touch.clientX - touchStartPos.current.x,
+        touch.clientY - touchStartPos.current.y
+      );
+      if (dist > 10) {
+        if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+        setIsLongPressing(null);
+      }
       return;
     }
 
-    const targetElement = document.elementFromPoint(touchCoord.x, touchCoord.y);
-    const cell = targetElement?.closest('[data-grid-cell]');
+    setTouchCoord({ x: touch.clientX, y: touch.clientY });
 
+    const targetElement = document.elementFromPoint(touch.clientX, touch.clientY);
+    const cell = targetElement?.closest('[data-grid-cell]');
     if (cell) {
-      const cellCoord = cell.getAttribute('data-grid-cell');
-      if (cellCoord) {
-        setEditorMatrix((prev) => ({
-          ...prev,
-          [cellCoord]: touchDraggingBlock,
-        }));
+      const coord = cell.getAttribute('data-grid-cell');
+      setHoveredCellCoord(coord);
+    } else {
+      setHoveredCellCoord(null);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    setIsLongPressing(null);
+
+    if (touchDraggingBlock && touchCoord) {
+      const targetElement = document.elementFromPoint(touchCoord.x, touchCoord.y);
+      const cell = targetElement?.closest('[data-grid-cell]');
+
+      if (cell) {
+        const cellCoord = cell.getAttribute('data-grid-cell');
+        if (cellCoord) {
+          setEditorMatrix((prev) => ({
+            ...prev,
+            [cellCoord]: touchDraggingBlock,
+          }));
+          if (typeof window !== 'undefined' && window.navigator && window.navigator.vibrate) {
+            window.navigator.vibrate(30);
+          }
+        }
       }
     }
 
     setTouchDraggingBlock(null);
     setTouchCoord(null);
+    setHoveredCellCoord(null);
   };
 
   const clearMatrixCell = (rowIndex: number, colIndex: number) => {
@@ -847,26 +886,27 @@ export default function CampusDashboard() {
         <div
           style={{
             position: 'fixed',
-            left: `${touchCoord.x - 60}px`,
-            top: `${touchCoord.y - 45}px`,
+            left: `${touchCoord.x - 70}px`,
+            top: `${touchCoord.y - 50}px`,
             pointerEvents: 'none',
-            zIndex: 9999,
+            zIndex: 99999,
           }}
-          className={`px-3 py-1.5 rounded-xl border shadow-2xl backdrop-blur-md opacity-90 scale-105 font-bold text-xs ${touchDraggingBlock.tagColor}`}
+          className="px-4 py-2 rounded-2xl border-2 border-blue-500 shadow-2xl backdrop-blur-md scale-110 font-bold text-xs flex items-center gap-2 bg-white/95 dark:bg-zinc-900/95 text-zinc-900 dark:text-white ring-8 ring-blue-500/20"
         >
-          {touchDraggingBlock.name}
+          <span className="w-2 h-2 rounded-full bg-blue-500 animate-ping" />
+          <span>{touchDraggingBlock.name}</span>
         </div>
       )}
 
       {/* Top Header */}
       <header className="sticky top-0 z-40 px-4 md:px-8 py-3.5 backdrop-blur-xl bg-white/75 dark:bg-zinc-900/75 border-b border-zinc-200 dark:border-zinc-800">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {/* Thumbs Up Cat Meme Mascot */}
+          <div className="flex items-center gap-3.5">
+            {/* Thumbs Up Cat Meme Mascot - Enlarged 50% */}
             <img
               src="/logo.png"
               alt="ShouldISkip Mascot"
-              className="w-9 h-9 rounded-xl object-contain drop-shadow-sm hover:rotate-6 transition duration-200 cursor-pointer"
+              className="w-14 h-14 rounded-2xl object-contain drop-shadow-md hover:rotate-6 transition duration-200 cursor-pointer shrink-0"
             />
             <div>
               <div className="flex items-center gap-2">
@@ -1377,7 +1417,7 @@ export default function CampusDashboard() {
               <div>
                 <h3 className="text-base font-bold tracking-tight">Modify Weekly Schedule</h3>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                  Drag or tap to place courses into base slots. Consecutive identical blocks merge cleanly into 1 class.
+                  Hold a block to pick it up on mobile or drag on desktop. Consecutive identical blocks merge cleanly into 1 class.
                 </p>
               </div>
 
@@ -1490,7 +1530,7 @@ export default function CampusDashboard() {
                     </div>
                   ) : (
                     <p className="text-[10px] text-zinc-400">
-                      Drag a card, or tap to select and tap a slot to place.
+                      Hold a card for 0.4s to pick it up, or tap to select and tap a slot to place.
                     </p>
                   )}
 
@@ -1588,8 +1628,12 @@ export default function CampusDashboard() {
                           onClick={() => {
                             setSelectedPaletteBlock((prev) => (prev?.id === block.id ? null : block));
                           }}
-                          className={`p-2.5 rounded-xl border flex items-center justify-between cursor-grab active:cursor-grabbing hover:scale-[1.01] transition select-none group ${
+                          className={`p-2.5 rounded-xl border flex items-center justify-between cursor-grab active:cursor-grabbing transition-all select-none group touch-none ${
                             block.tagColor
+                          } ${
+                            isLongPressing === block.id
+                              ? 'scale-105 ring-4 ring-blue-500 shadow-xl opacity-90'
+                              : ''
                           } ${
                             selectedPaletteBlock?.id === block.id
                               ? 'ring-2 ring-blue-500 ring-offset-1 dark:ring-offset-zinc-950 scale-[1.02]'
@@ -1744,6 +1788,7 @@ export default function CampusDashboard() {
                               }
 
                               const canMerge = contiguousCount > 1;
+                              const isHoveredTarget = hoveredCellCoord === `${rIdx}-${currIdx}`;
 
                               cells.push(
                                 <td
@@ -1764,7 +1809,11 @@ export default function CampusDashboard() {
                                     }
                                   }}
                                   className={`p-1.5 border-r border-zinc-200 dark:border-zinc-800 h-16 min-w-[150px] relative group transition cursor-pointer ${
-                                    selectedPaletteBlock ? 'hover:bg-blue-500/5 dark:hover:bg-blue-500/10' : ''
+                                    isHoveredTarget
+                                      ? 'bg-blue-500/20 border-2 border-blue-500 ring-2 ring-blue-500/30'
+                                      : selectedPaletteBlock
+                                      ? 'hover:bg-blue-500/5 dark:hover:bg-blue-500/10'
+                                      : ''
                                   }`}
                                 >
                                   {item ? (
@@ -1818,8 +1867,10 @@ export default function CampusDashboard() {
                                       </div>
                                     </div>
                                   ) : (
-                                    <div className="h-full w-full rounded-lg border border-dashed border-zinc-200 dark:border-zinc-800 flex items-center justify-center text-zinc-400 text-[10px]">
-                                      Empty
+                                    <div className={`h-full w-full rounded-lg border border-dashed border-zinc-200 dark:border-zinc-800 flex items-center justify-center text-zinc-400 text-[10px] transition ${
+                                      isHoveredTarget ? 'border-blue-500 text-blue-500 font-bold bg-blue-500/10' : ''
+                                    }`}>
+                                      {isHoveredTarget ? 'Drop Here' : 'Empty'}
                                     </div>
                                   )}
                                 </td>
