@@ -26,7 +26,13 @@ import {
   BarChart3,
   TrendingUp,
   Combine,
-  Split
+  Split,
+  ShieldCheck,
+  Calculator,
+  Download,
+  Share2,
+  Copy,
+  CheckCheck
 } from 'lucide-react';
 
 interface Profile {
@@ -103,14 +109,15 @@ export default function CampusDashboard() {
 
   const [allSlots, setAllSlots] = useState<TimetableSlot[]>([]);
   const [daySlots, setDaySlots] = useState<MergedSlot[]>([]);
-  const [dayAttendance, setDayAttendance] = useState<Record<string, 'present' | 'absent'>>({});
+  const [dayAttendance, setDayAttendance] = useState<Record<string, 'present' | 'absent' | 'od'>>({});
 
   const [totalAttended, setTotalAttended] = useState(0);
   const [totalHeld, setTotalHeld] = useState(0);
+  const [totalOD, setTotalOD] = useState(0);
   const [firstEntryDate, setFirstEntryDate] = useState<string | null>(null);
-  const [subjectStats, setSubjectStats] = useState<Record<string, { present: number; total: number }>>({});
+  const [subjectStats, setSubjectStats] = useState<Record<string, { present: number; total: number; od: number }>>({});
 
-  // Floating Timetable pop-up state
+  // Floating Timetable modal
   const [showTimetableModal, setShowTimetableModal] = useState(false);
   const [modalPos, setModalPos] = useState({ x: 40, y: 75 });
   const [isDragging, setIsDragging] = useState(false);
@@ -123,10 +130,8 @@ export default function CampusDashboard() {
   const [editorSemesterStart, setEditorSemesterStart] = useState('2026-08-17');
   const [editorRowDays, setEditorRowDays] = useState<string[]>(['Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
   const [editorColSlots, setEditorColSlots] = useState<string[]>(DEFAULT_BASE_SLOTS);
-
   const [editorMatrix, setEditorMatrix] = useState<Record<string, SubjectBlock | null>>({});
   const [mergedSpans, setMergedSpans] = useState<Record<string, number>>({});
-
   const [subjectPalette, setSubjectPalette] = useState<SubjectBlock[]>([]);
   const [newSub, setNewSub] = useState('');
   const [newProf, setNewProf] = useState('');
@@ -138,7 +143,7 @@ export default function CampusDashboard() {
   const [editProf, setEditProf] = useState('');
   const [editColor, setEditColor] = useState('');
 
-  // Enhanced Mobile Long-Press Drag & Tap States
+  // Mobile Long-Press Drag States
   const [selectedPaletteBlock, setSelectedPaletteBlock] = useState<SubjectBlock | null>(null);
   const [touchDraggingBlock, setTouchDraggingBlock] = useState<SubjectBlock | null>(null);
   const [touchCoord, setTouchCoord] = useState<{ x: number; y: number } | null>(null);
@@ -146,6 +151,18 @@ export default function CampusDashboard() {
   const [isLongPressing, setIsLongPressing] = useState<string | null>(null);
   const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
   const touchStartPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  // Feature: What-If Simulator
+  const [showSimulator, setShowSimulator] = useState(false);
+  const [simulatedSkips, setSimulatedSkips] = useState(1);
+
+  // Feature: Share & Import Schedule
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [shareCode, setShareCode] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [importCodeInput, setImportCodeInput] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [shareMessage, setShareMessage] = useState('');
 
   useEffect(() => {
     const root = document.documentElement;
@@ -226,7 +243,8 @@ export default function CampusDashboard() {
 
       let totalHeldCount = 0;
       let totalAttendedCount = 0;
-      const breakdown: Record<string, { present: number; total: number }> = {};
+      let totalODCount = 0;
+      const breakdown: Record<string, { present: number; total: number; od: number }> = {};
 
       Object.entries(recordsByDate).forEach(([dateStr, dateMap]) => {
         const [y, m, d] = dateStr.split('-').map(Number);
@@ -249,19 +267,24 @@ export default function CampusDashboard() {
           if (markedStatuses.length > 0) {
             totalHeldCount += 1;
             const isPresent = markedStatuses.includes('present');
-            if (isPresent) totalAttendedCount += 1;
+            const isOD = markedStatuses.includes('od');
+
+            if (isPresent || isOD) totalAttendedCount += 1;
+            if (isOD) totalODCount += 1;
 
             if (!breakdown[mSlot.subject]) {
-              breakdown[mSlot.subject] = { present: 0, total: 0 };
+              breakdown[mSlot.subject] = { present: 0, total: 0, od: 0 };
             }
             breakdown[mSlot.subject].total += 1;
-            if (isPresent) breakdown[mSlot.subject].present += 1;
+            if (isPresent || isOD) breakdown[mSlot.subject].present += 1;
+            if (isOD) breakdown[mSlot.subject].od += 1;
           }
         });
       });
 
       setTotalHeld(totalHeldCount);
       setTotalAttended(totalAttendedCount);
+      setTotalOD(totalODCount);
       setSubjectStats(breakdown);
     } catch (err) {
       console.error('Recalculation error:', err);
@@ -339,15 +362,16 @@ export default function CampusDashboard() {
         .eq('user_id', user.id)
         .eq('date', selectedDate);
 
-      const rawMap: Record<string, 'present' | 'absent'> = {};
+      const rawMap: Record<string, 'present' | 'absent' | 'od'> = {};
       records?.forEach((r) => {
-        rawMap[r.slot_id] = r.status as 'present' | 'absent';
+        rawMap[r.slot_id] = r.status as 'present' | 'absent' | 'od';
       });
 
-      const mergedAttendance: Record<string, 'present' | 'absent'> = {};
+      const mergedAttendance: Record<string, 'present' | 'absent' | 'od'> = {};
       merged.forEach((mSlot) => {
         const statuses = mSlot.slotIds.map((id) => rawMap[id]).filter(Boolean);
         if (statuses.includes('present')) mergedAttendance[mSlot.id] = 'present';
+        else if (statuses.includes('od')) mergedAttendance[mSlot.id] = 'od';
         else if (statuses.includes('absent')) mergedAttendance[mSlot.id] = 'absent';
       });
 
@@ -738,7 +762,8 @@ export default function CampusDashboard() {
     }
   };
 
-  const handleMarkMerged = async (mergedSlot: MergedSlot, status: 'present' | 'absent') => {
+  // 3-State attendance action (present | absent | od)
+  const handleMarkMerged = async (mergedSlot: MergedSlot, status: 'present' | 'absent' | 'od') => {
     if (!user || isHoliday) return;
 
     const currentStatus = dayAttendance[mergedSlot.id];
@@ -803,6 +828,136 @@ export default function CampusDashboard() {
     setSelectedDate(`${yyyy}-${mm}-${dd}`);
   };
 
+  // Feature: CSV Exporter
+  const handleExportCSV = async () => {
+    if (!user) return;
+
+    const { data: records } = await supabase
+      .from('attendance_records')
+      .select('date, status, slot_id')
+      .eq('user_id', user.id)
+      .order('date', { ascending: true });
+
+    if (!records || records.length === 0) {
+      alert('No attendance entries recorded to export.');
+      return;
+    }
+
+    const slotMap = new Map(allSlots.map((s) => [s.id, s]));
+
+    const rows = [
+      ['Date', 'Subject', 'Faculty', 'Time Slot', 'Attendance Status'],
+      ...records.map((r) => {
+        const slot = slotMap.get(r.slot_id);
+        return [
+          r.date,
+          slot?.subject || 'Unknown Course',
+          slot?.faculty || 'Faculty',
+          slot ? `${slot.start_time.slice(0, 5)} - ${slot.end_time.slice(0, 5)}` : 'N/A',
+          r.status.toUpperCase(),
+        ];
+      }),
+    ];
+
+    const csvContent =
+      'data:text/csv;charset=utf-8,' +
+      rows.map((e) => e.map((val) => `"${val}"`).join(',')).join('\n');
+
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `ShouldISkip_Attendance_Ledger_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Feature: Share Timetable Generation
+  const handleGenerateShareCode = async () => {
+    if (!user) return;
+    setShareMessage('');
+
+    const activeSlots = allSlots.filter((s) => !s.effective_until);
+    if (activeSlots.length === 0) {
+      alert('Please configure your timetable before sharing.');
+      return;
+    }
+
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+
+    const { error } = await supabase.from('shared_timetables').insert({
+      share_code: code,
+      creator_id: user.id,
+      title: `${profile?.stream || 'Class'} Schedule`,
+      schedule_data: activeSlots.map((s) => ({
+        subject: s.subject,
+        faculty: s.faculty,
+        day_of_week: s.day_of_week,
+        start_time: s.start_time,
+        end_time: s.end_time,
+      })),
+    });
+
+    if (error) {
+      setShareMessage('Failed to create share code: ' + error.message);
+    } else {
+      setShareCode(code);
+    }
+  };
+
+  // Feature: Import Timetable via Peer Code
+  const handleImportTimetable = async () => {
+    if (!user || !importCodeInput.trim()) return;
+    setImporting(true);
+    setShareMessage('');
+
+    try {
+      const cleanCode = importCodeInput.trim().toUpperCase();
+      const { data, error } = await supabase
+        .from('shared_timetables')
+        .select('*')
+        .eq('share_code', cleanCode)
+        .maybeSingle();
+
+      if (error || !data) {
+        setShareMessage('Invalid or expired timetable code.');
+        setImporting(false);
+        return;
+      }
+
+      const importedSlots = data.schedule_data.map((item: any) => ({
+        user_id: user.id,
+        subject: item.subject,
+        faculty: item.faculty || 'Faculty',
+        day_of_week: item.day_of_week,
+        start_time: item.start_time,
+        end_time: item.end_time,
+        effective_from: selectedDate,
+        effective_until: null,
+      }));
+
+      // Invalidate active slots starting from today
+      const [y, m, d] = selectedDate.split('-').map(Number);
+      const prevDate = new Date(y, m - 1, d - 1).toISOString().split('T')[0];
+
+      await supabase
+        .from('timetable')
+        .update({ effective_until: prevDate })
+        .eq('user_id', user.id)
+        .is('effective_until', null);
+
+      await supabase.from('timetable').insert(importedSlots);
+
+      await loadData();
+      setShareMessage(`Successfully imported "${data.title}"!`);
+      setImportCodeInput('');
+    } catch (err: any) {
+      setShareMessage('Import failed: ' + err.message);
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const startDrag = (e: React.MouseEvent) => {
     setIsDragging(true);
     dragStartRef.current = {
@@ -851,6 +1006,18 @@ export default function CampusDashboard() {
 
   const safeBunks = !isBelow && totalHeld > 0
     ? Math.floor((100 * totalAttended - target * totalHeld) / target)
+    : 0;
+
+  // Simulator Projections
+  const simHeld = totalHeld + simulatedSkips;
+  const simAttended = totalAttended; // All simulated are missed
+  const simPercentage = simHeld > 0 ? (simAttended / simHeld) * 100 : 0;
+  const simIsBelow = simHeld > 0 && simPercentage < target;
+  const simSafeBunks = !simIsBelow && simHeld > 0
+    ? Math.floor((100 * simAttended - target * simHeld) / target)
+    : 0;
+  const simRecovery = simIsBelow
+    ? Math.max(0, Math.ceil((target * simHeld - 100 * simAttended) / (100 - target)))
     : 0;
 
   const [y, m, d] = selectedDate.split('-').map(Number);
@@ -902,7 +1069,7 @@ export default function CampusDashboard() {
       <header className="sticky top-0 z-40 px-4 md:px-8 py-3.5 backdrop-blur-xl bg-white/75 dark:bg-zinc-900/75 border-b border-zinc-200 dark:border-zinc-800">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3.5">
-            {/* Thumbs Up Cat Meme Mascot - Enlarged 50% */}
+            {/* Thumbs Up Cat Meme Mascot */}
             <img
               src="/logo.png"
               alt="ShouldISkip Mascot"
@@ -925,18 +1092,44 @@ export default function CampusDashboard() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={() => setShowSimulator(true)}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border border-zinc-200 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition"
+              title="Simulate future skips"
+            >
+              <Calculator className="w-3.5 h-3.5 text-emerald-500" />
+              <span className="hidden sm:inline">Simulator</span>
+            </button>
+
+            <button
+              onClick={() => setShowShareModal(true)}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border border-zinc-200 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition"
+              title="Share or Import Timetable"
+            >
+              <Share2 className="w-3.5 h-3.5 text-blue-500" />
+              <span className="hidden sm:inline">Share</span>
+            </button>
+
+            <button
+              onClick={handleExportCSV}
+              className="p-2 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white/60 dark:bg-zinc-800/60 hover:opacity-80 transition"
+              title="Export CSV Ledger"
+            >
+              <Download className="w-4 h-4 text-zinc-600 dark:text-zinc-300" />
+            </button>
+
             <button
               onClick={openEditor}
               className="flex items-center gap-1.5 text-xs font-semibold px-3.5 py-1.5 rounded-full border border-zinc-200 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition"
             >
               <Edit3 className="w-3.5 h-3.5 text-blue-500" />
-              <span>Modify Schedule</span>
+              <span className="hidden sm:inline">Modify Schedule</span>
             </button>
 
             <button
               onClick={() => setShowTimetableModal(!showTimetableModal)}
-              className={`flex items-center gap-1.5 text-xs font-semibold px-3.5 py-1.5 rounded-full transition-all border ${
+              className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full transition-all border ${
                 showTimetableModal
                   ? 'bg-blue-600 text-white border-transparent'
                   : 'bg-zinc-200/50 dark:bg-zinc-800/50 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300'
@@ -1008,7 +1201,7 @@ export default function CampusDashboard() {
                 {totalAttended} <span className="text-xl font-normal text-zinc-400">/ {totalHeld}</span>
               </div>
               <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 font-medium">
-                {totalHeld - totalAttended} absences recorded to date
+                {totalHeld - totalAttended} unexcused absences {totalOD > 0 && `(incl. ${totalOD} OD)`}
               </p>
             </div>
 
@@ -1161,7 +1354,7 @@ export default function CampusDashboard() {
                     className="bg-white dark:bg-zinc-900 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-zinc-200 dark:border-zinc-800 hover:shadow-sm transition"
                   >
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-sm tracking-tight">{mSlot.subject}</span>
                         {isMerged && (
                           <span className="text-[10px] font-semibold bg-blue-500/10 text-blue-600 dark:text-blue-400 px-2 py-0.5 rounded-md border border-blue-500/20">
@@ -1177,9 +1370,11 @@ export default function CampusDashboard() {
                           <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
                             status === 'present'
                               ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                              : status === 'od'
+                              ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
                               : 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
                           }`}>
-                            {status}
+                            {status === 'od' ? 'On Duty / Medical' : status}
                           </span>
                         )}
                       </div>
@@ -1189,10 +1384,11 @@ export default function CampusDashboard() {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 self-end sm:self-center">
+                    {/* 3 Action Buttons: Yes, No, OD */}
+                    <div className="flex items-center gap-1.5 self-end sm:self-center flex-wrap">
                       <button
                         onClick={() => handleMarkMerged(mSlot, 'present')}
-                        className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition active:scale-95 ${
+                        className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition active:scale-95 ${
                           status === 'present'
                             ? 'bg-emerald-600 text-white shadow-sm'
                             : 'bg-zinc-200/60 dark:bg-zinc-800/60 text-zinc-700 dark:text-zinc-300 hover:opacity-80'
@@ -1204,7 +1400,7 @@ export default function CampusDashboard() {
 
                       <button
                         onClick={() => handleMarkMerged(mSlot, 'absent')}
-                        className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition active:scale-95 ${
+                        className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-semibold transition active:scale-95 ${
                           status === 'absent'
                             ? 'bg-rose-600 text-white shadow-sm'
                             : 'bg-zinc-200/60 dark:bg-zinc-800/60 text-zinc-700 dark:text-zinc-300 hover:opacity-80'
@@ -1212,6 +1408,19 @@ export default function CampusDashboard() {
                       >
                         <X className="w-3.5 h-3.5" />
                         <span>No</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleMarkMerged(mSlot, 'od')}
+                        className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-xs font-semibold transition active:scale-95 ${
+                          status === 'od'
+                            ? 'bg-amber-500 text-white shadow-sm'
+                            : 'bg-zinc-200/60 dark:bg-zinc-800/60 text-zinc-700 dark:text-zinc-300 hover:opacity-80'
+                        }`}
+                        title="Duty / Medical Waiver"
+                      >
+                        <ShieldCheck className="w-3.5 h-3.5" />
+                        <span>OD</span>
                       </button>
                     </div>
                   </div>
@@ -1221,18 +1430,16 @@ export default function CampusDashboard() {
           )}
         </section>
 
-        {/* Data Visualization Section */}
+        {/* Data Visualizations */}
         <section className="space-y-6 pt-4">
           <div className="flex items-center gap-2">
             <BarChart3 className="w-4 h-4 text-blue-500" />
             <h2 className="text-sm font-bold uppercase tracking-wider text-zinc-400">
-              Analytics & Data Visualizations
+              Analytics & Visualizations
             </h2>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            
-            {/* Chart 1: Global Cumulative Attendance Distribution */}
             <div className="backdrop-blur-xl bg-white/70 dark:bg-zinc-900/60 p-6 rounded-[28px] border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -1240,7 +1447,7 @@ export default function CampusDashboard() {
                     Cumulative Attendance Distribution
                   </h3>
                   <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-                    Attended vs. Missed proportional comparison
+                    Attended + OD vs. Missed proportional ratio
                   </p>
                 </div>
                 <TrendingUp className="w-4 h-4 text-emerald-500" />
@@ -1267,26 +1474,26 @@ export default function CampusDashboard() {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between text-xs pt-1">
+                  <div className="flex items-center justify-between text-xs pt-1 flex-wrap gap-2">
                     <div className="flex items-center gap-2">
                       <div className="w-3 h-3 rounded-full bg-emerald-500" />
-                      <span className="font-semibold">{totalAttended} Attended</span>
+                      <span className="font-semibold">{totalAttended} Compliant</span>
                     </div>
+                    {totalOD > 0 && (
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-amber-500" />
+                        <span className="font-semibold">{totalOD} On Duty</span>
+                      </div>
+                    )}
                     <div className="flex items-center gap-2">
                       <div className="w-3 h-3 rounded-full bg-rose-500" />
                       <span className="font-semibold">{totalHeld - totalAttended} Missed</span>
                     </div>
                   </div>
-
-                  <div className="p-3 rounded-xl bg-zinc-100/70 dark:bg-zinc-800/40 border border-zinc-200 dark:border-zinc-800 flex items-center justify-between text-xs">
-                    <span className="text-zinc-500 dark:text-zinc-400">Target Threshold</span>
-                    <span className="font-bold text-blue-500">{target}% Minimum</span>
-                  </div>
                 </div>
               )}
             </div>
 
-            {/* Chart 2: Course Performance Bars */}
             <div className="backdrop-blur-xl bg-white/70 dark:bg-zinc-900/60 p-6 rounded-[28px] border border-zinc-200 dark:border-zinc-800 shadow-sm space-y-4">
               <div className="flex items-center justify-between">
                 <div>
@@ -1294,7 +1501,7 @@ export default function CampusDashboard() {
                     Subject Performance Distribution
                   </h3>
                   <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
-                    Percentage compliance by enrolled subject
+                    Compliance percentage per registered course
                   </p>
                 </div>
               </div>
@@ -1331,11 +1538,162 @@ export default function CampusDashboard() {
                 </div>
               )}
             </div>
-
           </div>
         </section>
 
       </main>
+
+      {/* FEATURE MODAL: WHAT-IF BUNK SIMULATOR */}
+      {showSimulator && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#121214] border border-zinc-200 dark:border-zinc-800 rounded-[28px] max-w-md w-full p-6 space-y-6 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Calculator className="w-4 h-4 text-emerald-500" />
+                <h3 className="text-sm font-bold">What-If Bunk Sandbox</h3>
+              </div>
+              <button
+                onClick={() => setShowSimulator(false)}
+                className="w-6 h-6 rounded-full bg-zinc-200/60 dark:bg-zinc-800/60 text-xs flex items-center justify-center text-zinc-500"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                Simulate skipping upcoming classes without modifying your actual recorded ledger.
+              </p>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs font-semibold">
+                  <span>Simulate Missing Classes:</span>
+                  <span className="text-blue-500 text-sm font-bold">{simulatedSkips} Lectures</span>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="15"
+                  value={simulatedSkips}
+                  onChange={(e) => setSimulatedSkips(Number(e.target.value))}
+                  className="w-full accent-blue-500 cursor-pointer"
+                />
+              </div>
+
+              {/* Simulation Comparison Matrix */}
+              <div className="p-4 rounded-2xl bg-zinc-100 dark:bg-zinc-900/80 border border-zinc-200 dark:border-zinc-800 space-y-3">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-zinc-500 dark:text-zinc-400">Current Percentage:</span>
+                  <span className="font-bold">{totalHeld > 0 ? `${percentage.toFixed(1)}%` : '—'}</span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-zinc-500 dark:text-zinc-400">Projected Percentage:</span>
+                  <span className={`font-extrabold ${simIsBelow ? 'text-rose-500' : 'text-emerald-500'}`}>
+                    {simPercentage.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="border-t border-zinc-200 dark:border-zinc-800 pt-2 flex items-center justify-between text-xs">
+                  <span className="text-zinc-500 dark:text-zinc-400">Projected Status:</span>
+                  <span className={`font-bold ${simIsBelow ? 'text-rose-500' : 'text-emerald-500'}`}>
+                    {simIsBelow ? `Need +${simRecovery} recovery classes` : `${simSafeBunks} safe bunks left`}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setShowSimulator(false)}
+              className="w-full py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition"
+            >
+              Done Testing
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* FEATURE MODAL: PEER TIMETABLE SHARE & IMPORT */}
+      {showShareModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#121214] border border-zinc-200 dark:border-zinc-800 rounded-[28px] max-w-md w-full p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Share2 className="w-4 h-4 text-blue-500" />
+                <h3 className="text-sm font-bold">Share & Clone Schedule</h3>
+              </div>
+              <button
+                onClick={() => {
+                  setShowShareModal(false);
+                  setShareMessage('');
+                }}
+                className="w-6 h-6 rounded-full bg-zinc-200/60 dark:bg-zinc-800/60 text-xs flex items-center justify-center text-zinc-500"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Share Out Section */}
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Share Your Timetable</h4>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                Generate a 6-character code classmates can enter to copy your entire weekly matrix.
+              </p>
+
+              {shareCode ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20 text-center font-mono font-extrabold text-blue-500 text-base tracking-widest">
+                    {shareCode}
+                  </div>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(shareCode);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
+                    }}
+                    className="p-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white transition flex items-center gap-1 text-xs font-semibold"
+                  >
+                    {copied ? <CheckCheck className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    <span>{copied ? 'Copied' : 'Copy'}</span>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={handleGenerateShareCode}
+                  className="w-full py-2 rounded-xl bg-zinc-200 dark:bg-zinc-800 text-xs font-semibold hover:bg-zinc-300 dark:hover:bg-zinc-700 transition"
+                >
+                  Generate Share Code
+                </button>
+              )}
+            </div>
+
+            <div className="border-t border-zinc-200 dark:border-zinc-800 pt-4 space-y-3">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-400">Import Classmate's Timetable</h4>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Enter 6-char code (e.g. A9B2C4)"
+                  value={importCodeInput}
+                  onChange={(e) => setImportCodeInput(e.target.value.toUpperCase())}
+                  maxLength={6}
+                  className="flex-1 uppercase font-mono tracking-widest bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs focus:outline-none"
+                />
+                <button
+                  onClick={handleImportTimetable}
+                  disabled={importing || !importCodeInput.trim()}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-xs font-semibold transition"
+                >
+                  {importing ? 'Importing...' : 'Clone'}
+                </button>
+              </div>
+
+              {shareMessage && (
+                <p className="text-xs text-blue-500 font-medium text-center pt-1">
+                  {shareMessage}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Floating Timetable Preview */}
       {showTimetableModal && (
@@ -1411,8 +1769,6 @@ export default function CampusDashboard() {
       {isEditorOpen && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white dark:bg-[#121214] border border-zinc-200 dark:border-zinc-800 rounded-[28px] max-w-6xl w-full p-6 space-y-6 shadow-2xl my-8">
-            
-            {/* Modal Header */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-zinc-200 dark:border-zinc-800 pb-4">
               <div>
                 <h3 className="text-base font-bold tracking-tight">Modify Weekly Schedule</h3>
@@ -1439,7 +1795,6 @@ export default function CampusDashboard() {
               </div>
             </div>
 
-            {/* Scope / Mode Selector + Semester Start Date */}
             <div className="p-4 rounded-2xl bg-zinc-100 dark:bg-zinc-900/60 border border-zinc-200 dark:border-zinc-800 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
               <div className="space-y-1">
                 <span className="text-xs font-bold uppercase tracking-wider text-blue-500">
@@ -1503,10 +1858,8 @@ export default function CampusDashboard() {
               </div>
             </div>
 
-            {/* Editor Canvas */}
+            {/* Grid & Palette Shelf */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-              
-              {/* Left Subject Palette Shelf */}
               <div className="lg:col-span-4 space-y-4">
                 <div className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-900/30 rounded-2xl p-4 space-y-3">
                   <div className="flex items-center justify-between">
@@ -1540,14 +1893,14 @@ export default function CampusDashboard() {
                       placeholder="Course name (e.g. AI Lab)"
                       value={newSub}
                       onChange={(e) => setNewSub(e.target.value)}
-                      className="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1"
+                      className="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none"
                     />
                     <input
                       type="text"
                       placeholder="Faculty / Room"
                       value={newProf}
                       onChange={(e) => setNewProf(e.target.value)}
-                      className="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1"
+                      className="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs focus:outline-none"
                     />
                     <button
                       type="submit"
@@ -1679,7 +2032,6 @@ export default function CampusDashboard() {
                 </div>
               </div>
 
-              {/* Right Matrix Sheet with Atomic Slots */}
               <div className="lg:col-span-8 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between flex-wrap gap-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-zinc-400">
