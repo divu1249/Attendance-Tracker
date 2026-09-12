@@ -522,14 +522,13 @@ export default function CampusDashboard() {
     setTouchCoord({ x: touch.clientX, y: touch.clientY });
   };
 
-  const handleTouchEnd = (e: React.TouchEvent) => {
+  const handleTouchEnd = () => {
     if (!touchDraggingBlock || !touchCoord) {
       setTouchDraggingBlock(null);
       setTouchCoord(null);
       return;
     }
 
-    // Identify which cell is under the release position
     const targetElement = document.elementFromPoint(touchCoord.x, touchCoord.y);
     const cell = targetElement?.closest('[data-grid-cell]');
 
@@ -843,7 +842,7 @@ export default function CampusDashboard() {
       onTouchEnd={handleTouchEnd}
     >
       
-      {/* Ghost Preview Pill for Mobile Drag */}
+      {/* Floating Ghost Pill for Mobile Drag */}
       {touchDraggingBlock && touchCoord && (
         <div
           style={{
@@ -863,13 +862,16 @@ export default function CampusDashboard() {
       <header className="sticky top-0 z-40 px-4 md:px-8 py-3.5 backdrop-blur-xl bg-white/75 dark:bg-zinc-900/75 border-b border-zinc-200 dark:border-zinc-800">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-zinc-900 dark:bg-zinc-100 flex items-center justify-center text-white dark:text-zinc-900 font-bold text-xs shadow-sm">
-              A
-            </div>
+            {/* Thumbs Up Cat Meme Mascot */}
+            <img
+              src="/logo.png"
+              alt="ShouldISkip Mascot"
+              className="w-9 h-9 rounded-xl object-contain drop-shadow-sm hover:rotate-6 transition duration-200 cursor-pointer"
+            />
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-sm font-semibold tracking-tight leading-tight">
-                  {profile?.college_name || 'College Workspace'}
+                  {profile?.college_name || 'ShouldISkip'}
                 </h1>
                 {profile?.is_admin && (
                   <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
@@ -1841,7 +1843,7 @@ export default function CampusDashboard() {
       )}
 
       <footer className="py-6 text-center text-xs text-zinc-400">
-        Campus Studio &copy; {new Date().getFullYear()}
+        ShouldISkip &copy; {new Date().getFullYear()}
       </footer>
     </div>
   );
