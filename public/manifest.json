@@ -1,0 +1,21 @@
+{
+  "name": "ShouldISkip — Attendance Studio",
+  "short_name": "ShouldISkip",
+  "description": "Smart Attendance Margin & Dynamic Timetable Studio",
+  "start_url": "/dashboard",
+  "display": "standalone",
+  "background_color": "#0c0c0e",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
