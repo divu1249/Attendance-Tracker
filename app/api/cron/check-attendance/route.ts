@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { Resend } from 'resend';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   // 1. Authenticate Cron Job
@@ -13,6 +13,12 @@ export async function GET(request: NextRequest) {
   ) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  if (!process.env.RESEND_API_KEY || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return NextResponse.json({ error: 'Server keys not configured' }, { status: 500 });
+  }
+
+  const resend = new Resend(process.env.RESEND_API_KEY);
 
   try {
     // 2. Fetch all student profiles
@@ -65,7 +71,7 @@ export async function GET(request: NextRequest) {
         );
 
         // Send alert email through Resend
-        const emailResponse = await resend.emails.send({
+        await resend.emails.send({
           from: 'Attendance Studio <onboarding@resend.dev>',
           to: student.email,
           subject: `⚠️ Low Attendance Warning: ${pct.toFixed(1)}% (${student.college_name || 'Campus'})`,

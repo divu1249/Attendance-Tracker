@@ -2,17 +2,24 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { Resend } from 'resend';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-const resend = new Resend(process.env.RESEND_API_KEY);
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   const authHeader = request.headers.get('authorization');
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const resendKey = process.env.RESEND_API_KEY;
+
+  if (!supabaseUrl || !serviceRole || !resendKey) {
+    return NextResponse.json({ error: 'Server keys not configured' }, { status: 500 });
+  }
+
+  const supabase = createClient(supabaseUrl, serviceRole);
+  const resend = new Resend(resendKey);
 
   const today = new Date().toISOString().split('T')[0];
   const { data: users, error: userErr } = await supabase.from('profiles').select('*');

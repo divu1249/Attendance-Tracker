@@ -6,6 +6,11 @@ import Link from 'next/link';
 import { supabase } from '@/lib/supabaseClient';
 import { SyncEngine } from '@/lib/syncEngine';
 import { toast } from 'sonner';
+import NoticeBoardBanner from '@/components/NoticeBoardBanner';
+import ClassroomsWorkspace from '@/components/ClassroomsWorkspace';
+import ExamsWorkspace from '@/components/ExamsWorkspace';
+import AssignmentsWorkspace from '@/components/AssignmentsWorkspace';
+import AdminTelemetryWorkspace from '@/components/AdminTelemetryWorkspace';
 import {
   Calendar as CalendarIcon,
   Check,
@@ -48,11 +53,16 @@ import {
   FlaskConical,
   BookOpen,
   WifiOff,
+  Users,
+  CalendarClock,
+  ClipboardList,
+  ShieldAlert,
 } from 'lucide-react';
 
 interface Profile {
   id: string;
   username: string;
+  full_name?: string;
   college_name: string;
   stream: string;
   semester: number;
@@ -145,8 +155,14 @@ export default function CampusDashboard() {
   const [firstEntryDate, setFirstEntryDate] = useState<string | null>(null);
   const [subjectStats, setSubjectStats] = useState<Record<string, { present: number; total: number; od: number; type: 'theory' | 'lab' }>>({});
 
+  const [activeTab, setActiveTab] = useState<'attendance' | 'classrooms' | 'exams' | 'assignments' | 'admin'>('attendance');
+  const [activeClassroomId, setActiveClassroomId] = useState<string | null>(null);
+  const [isOptionalExamDay, setIsOptionalExamDay] = useState(false);
+  const [optionalExamSubject, setOptionalExamSubject] = useState<string | null>(null);
+
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [editUsername, setEditUsername] = useState('');
+  const [editFullName, setEditFullName] = useState('');
   const [editCollege, setEditCollege] = useState('');
   const [editStream, setEditStream] = useState('');
   const [editSemester, setEditSemester] = useState(1);
@@ -391,6 +407,7 @@ export default function CampusDashboard() {
     if (prof) {
       setProfile(prof);
       setEditUsername(prof.username || '');
+      setEditFullName(prof.full_name || '');
       setEditCollege(prof.college_name || '');
       setEditStream(prof.stream || '');
       setEditSemester(prof.semester || 1);
@@ -417,12 +434,39 @@ export default function CampusDashboard() {
       .maybeSingle();
 
     if (shared) setActiveShareRoom(shared.share_code);
+
+    const { data: firstMembership } = await supabase
+      .from('classroom_members')
+      .select('classroom_id')
+      .eq('user_id', authData.user.id)
+      .order('joined_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (firstMembership?.classroom_id) {
+      setActiveClassroomId((prev) => prev || firstMembership.classroom_id);
+    }
+
     setLoading(false);
   }, [recalculateStats]);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // 60-second active engagement heartbeat
+  useEffect(() => {
+    if (!user) return;
+    const heartbeat = setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        supabase.rpc('log_user_activity', { p_seconds: 60 }).then(({ error }) => {
+          if (error) console.warn('Activity heartbeat skipped:', error.message);
+        });
+      }
+    }, 60000);
+
+    return () => clearInterval(heartbeat);
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -490,13 +534,40 @@ export default function CampusDashboard() {
         });
         if (isMounted) setPulseVotes(counts);
       }
+
+      // Check if selectedDate falls on an optional-classes exam day
+      let examQuery = supabase
+        .from('exam_datesheet')
+        .select('subject, exam_date, end_date, classes_optional')
+        .eq('classes_optional', true);
+
+      if (activeClassroomId) {
+        examQuery = examQuery.or(
+          `user_id.eq.${user.id},and(classroom_id.eq.${activeClassroomId},is_shared.eq.true)`
+        );
+      } else {
+        examQuery = examQuery.eq('user_id', user.id);
+      }
+
+      const { data: examRows } = await examQuery;
+      const matchingExam = (examRows || []).find((ex: any) => {
+        if (ex.end_date) {
+          return selectedDate >= ex.exam_date && selectedDate <= ex.end_date;
+        }
+        return selectedDate === ex.exam_date;
+      });
+
+      if (isMounted) {
+        setIsOptionalExamDay(!!matchingExam);
+        setOptionalExamSubject(matchingExam?.subject || null);
+      }
     };
 
     syncCurrentDate();
     return () => {
       isMounted = false;
     };
-  }, [selectedDate, allSlots, user, activeShareRoom, mergeConsecutiveSlots]);
+  }, [selectedDate, allSlots, user, activeShareRoom, activeClassroomId, mergeConsecutiveSlots]);
 
   const parseTimeToMinutes = (t: string) => {
     const [h, m] = t.slice(0, 5).split(':').map(Number);
@@ -544,6 +615,7 @@ export default function CampusDashboard() {
     try {
       const updates = {
         username: editUsername.trim(),
+        full_name: editFullName.trim(),
         college_name: editCollege.trim(),
         stream: editStream.trim(),
         semester: Number(editSemester),
@@ -1470,7 +1542,7 @@ export default function CampusDashboard() {
                 )}
               </div>
               <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                {profile?.username || user?.email?.split('@')[0]} · {profile?.stream || 'Undergraduate'} (Sem {profile?.semester || 1})
+                {profile?.full_name || profile?.username || user?.email?.split('@')[0]} · {profile?.stream || 'Undergraduate'} (Sem {profile?.semester || 1})
               </p>
             </div>
           </div>
@@ -1571,9 +1643,118 @@ export default function CampusDashboard() {
         </div>
       </header>
 
+      {/* Workspace Navigation Tab Switcher */}
+      <nav aria-label="Workspace Tabs" className="border-b border-zinc-200 dark:border-zinc-800 bg-white/50 dark:bg-zinc-900/40 backdrop-blur-xl px-4 md:px-8 py-2.5">
+        <div className="max-w-6xl mx-auto flex items-center gap-2 overflow-x-auto no-scrollbar">
+          <button
+            type="button"
+            onClick={() => setActiveTab('attendance')}
+            className={`px-4 py-1.5 rounded-full text-xs font-semibold transition flex items-center gap-1.5 shrink-0 ${
+              activeTab === 'attendance'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'bg-zinc-200/60 dark:bg-zinc-800/60 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-300/70 dark:hover:bg-zinc-700/70'
+            }`}
+          >
+            <CalendarCheck className="w-3.5 h-3.5" />
+            <span>Attendance</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('classrooms')}
+            className={`px-4 py-1.5 rounded-full text-xs font-semibold transition flex items-center gap-1.5 shrink-0 ${
+              activeTab === 'classrooms'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'bg-zinc-200/60 dark:bg-zinc-800/60 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-300/70 dark:hover:bg-zinc-700/70'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5" />
+            <span>Classrooms & Notes</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('exams')}
+            className={`px-4 py-1.5 rounded-full text-xs font-semibold transition flex items-center gap-1.5 shrink-0 ${
+              activeTab === 'exams'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'bg-zinc-200/60 dark:bg-zinc-800/60 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-300/70 dark:hover:bg-zinc-700/70'
+            }`}
+          >
+            <CalendarClock className="w-3.5 h-3.5" />
+            <span>Exams & Syllabus</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('assignments')}
+            className={`px-4 py-1.5 rounded-full text-xs font-semibold transition flex items-center gap-1.5 shrink-0 ${
+              activeTab === 'assignments'
+                ? 'bg-blue-600 text-white shadow-sm'
+                : 'bg-zinc-200/60 dark:bg-zinc-800/60 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-300/70 dark:hover:bg-zinc-700/70'
+            }`}
+          >
+            <ClipboardList className="w-3.5 h-3.5" />
+            <span>Assignments</span>
+          </button>
+
+          {user?.email === 'divyanshchauhan356@gmail.com' && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('admin')}
+              className={`px-4 py-1.5 rounded-full text-xs font-semibold transition flex items-center gap-1.5 shrink-0 ${
+                activeTab === 'admin'
+                  ? 'bg-rose-600 text-white shadow-sm'
+                  : 'bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20'
+              }`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5" />
+              <span>Admin</span>
+            </button>
+          )}
+        </div>
+      </nav>
+
       {/* Main Container */}
       <main className="max-w-6xl mx-auto p-4 md:p-8 space-y-8">
-        
+        <NoticeBoardBanner userEmail={user?.email} />
+
+        {activeTab === 'classrooms' && (
+          <ClassroomsWorkspace
+            user={user}
+            profile={profile}
+            allSlots={allSlots}
+            selectedDate={selectedDate}
+            onReloadData={loadData}
+            activeClassroomId={activeClassroomId}
+            onSelectClassroom={setActiveClassroomId}
+          />
+        )}
+
+        {activeTab === 'exams' && (
+          <ExamsWorkspace
+            user={user}
+            profile={profile}
+            allSlots={allSlots}
+            activeClassroomId={activeClassroomId}
+          />
+        )}
+
+        {activeTab === 'assignments' && (
+          <AssignmentsWorkspace
+            user={user}
+            profile={profile}
+            allSlots={allSlots}
+            activeClassroomId={activeClassroomId}
+          />
+        )}
+
+        {activeTab === 'admin' && user?.email === 'divyanshchauhan356@gmail.com' && (
+          <AdminTelemetryWorkspace user={user} />
+        )}
+
+        {activeTab === 'attendance' && (
+        <>
         {/* KPI Section */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="backdrop-blur-xl bg-white/70 dark:bg-zinc-900/60 p-6 rounded-[24px] border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col justify-between">
@@ -1743,12 +1924,23 @@ export default function CampusDashboard() {
               </p>
             </div>
 
-            {activeShareRoom && (
-              <span className="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full flex items-center gap-1.5 w-fit">
-                <Flame className="w-3.5 h-3.5" />
-                <span>Room Pulse: {activeShareRoom}</span>
-              </span>
-            )}
+            <div className="flex items-center gap-2 flex-wrap">
+              {isOptionalExamDay && (
+                <span className="text-[11px] font-semibold text-purple-600 dark:text-purple-400 bg-purple-500/10 border border-purple-500/20 px-3 py-1 rounded-full flex items-center gap-1.5 w-fit">
+                  <CalendarClock className="w-3.5 h-3.5" />
+                  <span>
+                    Exam Day — Classes Optional{optionalExamSubject ? ` (${optionalExamSubject})` : ''}
+                  </span>
+                </span>
+              )}
+
+              {activeShareRoom && (
+                <span className="text-[11px] text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full flex items-center gap-1.5 w-fit">
+                  <Flame className="w-3.5 h-3.5" />
+                  <span>Room Pulse: {activeShareRoom}</span>
+                </span>
+              )}
+            </div>
           </div>
 
           {isHoliday ? (
@@ -1992,6 +2184,8 @@ export default function CampusDashboard() {
             </div>
           </div>
         </section>
+        </>
+        )}
 
       </main>
 
@@ -2072,6 +2266,19 @@ export default function CampusDashboard() {
 
             <form onSubmit={handleUpdateProfile} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1 sm:col-span-2">
+                  <label className="text-xs font-semibold text-zinc-400">
+                    Full Name (Public Display Name in Classrooms & Threads)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Divyansh Chauhan"
+                    value={editFullName}
+                    onChange={(e) => setEditFullName(e.target.value)}
+                    className="w-full bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl px-3 py-2 text-xs focus:outline-none"
+                  />
+                </div>
+
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-zinc-400">Name / Roll No</label>
                   <input
