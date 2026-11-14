@@ -6,10 +6,14 @@
     "dev": "next dev -p 3000 -H 0.0.0.0",
     "build": "next build",
     "start": "next start -p 3000 -H 0.0.0.0",
-    "lint": "next lint"
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
+    "@google/genai": "^3.3.0",
     "@supabase/supabase-js": "^2.48.0",
+    "@types/katex": "^0.16.8",
+    "jspdf": "^4.2.1",
+    "katex": "^0.19.1",
     "lucide-react": "^0.475.0",
     "next": "14.2.24",
     "next-pwa": "^5.6.0",

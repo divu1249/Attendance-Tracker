@@ -1,4 +1,5 @@
 import withPWAInit from 'next-pwa';
+import { PHASE_DEVELOPMENT_SERVER } from 'next/constants.js';
 
 const isProduction = process.env.NODE_ENV === 'production' && process.env.VERCEL === '1';
 
@@ -9,11 +10,14 @@ const withPWA = withPWAInit({
   skipWaiting: true,
 });
 
-/** @type {import('next').NextConfig} */
-const nextConfig = {
-  output: 'standalone',
-  reactStrictMode: true,
-  swcMinify: true,
-};
+export default function config(phase) {
+  /** @type {import('next').NextConfig} */
+  const nextConfig = {
+    distDir: phase === PHASE_DEVELOPMENT_SERVER ? '.next-dev' : '.next',
+    output: 'standalone',
+    reactStrictMode: true,
+    swcMinify: true,
+  };
 
-export default withPWA(nextConfig);
+  return withPWA(nextConfig);
+}

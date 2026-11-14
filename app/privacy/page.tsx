@@ -1,9 +1,7 @@
-import Link from 'next/link';
-
 export default function PrivacyPolicy() {
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-[#0c0c0e] text-zinc-900 dark:text-zinc-100 p-6 md:p-12 max-w-3xl mx-auto space-y-6 text-xs leading-relaxed">
-      <Link href="/dashboard" className="text-blue-500 hover:underline">← Back to Workspace</Link>
+      <a href="/dashboard" className="text-blue-500 hover:underline">← Back to Workspace</a>
       <h1 className="text-2xl font-bold tracking-tight">Privacy Policy</h1>
       <p className="text-zinc-500">Last updated: September 2026</p>
 

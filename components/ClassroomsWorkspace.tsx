@@ -1,8 +1,12 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { toast } from 'sonner';
+import RichStudyRenderer from '@/components/RichStudyRenderer';
+import { compileStudyPdf } from '@/lib/compileStudyPdf';
+import { safeParseStudyJson } from '@/lib/studyJsonParser';
+import type { RichStudyResponse } from '@/lib/aiTypes';
 import {
   Users,
   Plus,
@@ -23,6 +27,10 @@ import {
   BookOpen,
   Search,
   KeyRound,
+  User,
+  Eye,
+  FileDown,
+  X,
 } from 'lucide-react';
 
 interface MasterSlot {
@@ -79,6 +87,7 @@ interface ClassroomsWorkspaceProps {
   onReloadData: () => Promise<void>;
   activeClassroomId?: string | null;
   onSelectClassroom?: (id: string | null) => void;
+  notesRefreshKey?: number;
 }
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -106,6 +115,7 @@ export default function ClassroomsWorkspace({
   onReloadData,
   activeClassroomId: controlledClassroomId,
   onSelectClassroom,
+  notesRefreshKey = 0,
 }: ClassroomsWorkspaceProps) {
   const publicName = useMemo(
     () =>
@@ -128,7 +138,9 @@ export default function ClassroomsWorkspace({
     [onSelectClassroom]
   );
 
-  const [subTab, setSubTab] = useState<'schedule' | 'notes'>('schedule');
+  const [subTab, setSubTab] = useState<'schedule' | 'notes'>(
+    notesRefreshKey > 0 ? 'notes' : 'schedule'
+  );
   const [loading, setLoading] = useState(true);
   const [copiedCode, setCopiedCode] = useState(false);
 
@@ -148,12 +160,17 @@ export default function ClassroomsWorkspace({
   const [votes, setVotes] = useState<ClassroomVote[]>([]);
   const [memberCount, setMemberCount] = useState<number>(0);
 
-  // Notes state
-  const [notesScope, setNotesScope] = useState<'shared' | 'private'>('shared');
+  // Notes state (decoupled Private Vault & Classroom Shared Pool)
+  const [notesScope, setNotesScope] = useState<'shared' | 'private'>(
+    notesRefreshKey > 0 ? 'private' : 'shared'
+  );
   const [selectedSubjectFilter, setSelectedSubjectFilter] = useState<string>('ALL');
   const [noteSearch, setNoteSearch] = useState('');
-  const [notes, setNotes] = useState<SubjectNote[]>([]);
+  const [privateNotes, setPrivateNotes] = useState<SubjectNote[]>([]);
+  const [sharedNotes, setSharedNotes] = useState<SubjectNote[]>([]);
   const [loadingNotes, setLoadingNotes] = useState(false);
+  const [viewingNote, setViewingNote] = useState<SubjectNote | null>(null);
+  const [downloadingNoteId, setDownloadingNoteId] = useState<string | null>(null);
 
   // Add note form
   const [showAddNoteModal, setShowAddNoteModal] = useState(false);
@@ -241,59 +258,88 @@ export default function ClassroomsWorkspace({
   }, [fetchVotesAndMembers]);
 
   const fetchNotes = useCallback(async () => {
-    if (!user) return;
+    if (!user?.id) return;
     setLoadingNotes(true);
     try {
-      if (notesScope === 'shared') {
-        if (!activeClassroomId) {
-          setNotes([]);
-          setLoadingNotes(false);
-          return;
-        }
-        const { data, error } = await supabase
-          .from('subject_notes')
-          .select('*')
-          .eq('classroom_id', activeClassroomId)
-          .eq('is_shared', true)
-          .order('created_at', { ascending: false });
-        if (error) throw error;
-        setNotes(data || []);
-      } else {
-        const { data, error } = await supabase
-          .from('subject_notes')
-          .select('*')
-          .eq('user_id', user.id)
-          .eq('is_shared', false)
-          .order('created_at', { ascending: false });
-        if (error) throw error;
-        setNotes(data || []);
-      }
+      // ALWAYS fetch logged-in user's private vault notes regardless of classroom membership
+      const privatePromise = supabase
+        .from('subject_notes')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('is_shared', false)
+        .order('created_at', { ascending: false });
+
+      const sharedPromise = activeClassroomId
+        ? supabase
+            .from('subject_notes')
+            .select('*')
+            .eq('classroom_id', activeClassroomId)
+            .eq('is_shared', true)
+            .order('created_at', { ascending: false })
+        : Promise.resolve({ data: [] as SubjectNote[], error: null });
+
+      const [{ data: privData, error: privErr }, { data: shData, error: shErr }] =
+        await Promise.all([privatePromise, sharedPromise]);
+
+      if (privErr) throw privErr;
+      if (shErr) throw shErr;
+
+      setPrivateNotes(privData || []);
+      setSharedNotes(shData || []);
     } catch (err: any) {
       toast.error('Failed to load notes: ' + err.message);
     } finally {
       setLoadingNotes(false);
     }
-  }, [user, notesScope, activeClassroomId]);
+  }, [user?.id, activeClassroomId]);
 
+  const prevRefreshKeyRef = useRef(notesRefreshKey);
   useEffect(() => {
-    if (subTab === 'notes') {
-      fetchNotes();
+    if (notesRefreshKey > 0) {
+      setNotesScope('private');
+      if (notesRefreshKey !== prevRefreshKeyRef.current) {
+        prevRefreshKeyRef.current = notesRefreshKey;
+        setSubTab('notes');
+      }
     }
-  }, [subTab, fetchNotes]);
+  }, [notesRefreshKey]);
 
+  // Automatically switch to Private Vault when user has no classrooms yet
+  useEffect(() => {
+    if (!loading && classrooms.length === 0) {
+      setNotesScope('private');
+    }
+  }, [loading, classrooms.length]);
+
+  // Fetch private + shared notes independently on user, classroom, subTab, or refreshKey change
+  useEffect(() => {
+    fetchNotes();
+  }, [user?.id, activeClassroomId, subTab, notesRefreshKey, fetchNotes]);
+
+  const notes = useMemo(
+    () => (notesScope === 'private' ? privateNotes : sharedNotes),
+    [notesScope, privateNotes, sharedNotes]
+  );
+
+  // Merge timetable subjects + privateNotes + sharedNotes subjects case-insensitively
   const uniqueSubjects = useMemo(() => {
-    const set = new Set<string>();
-    allSlots.forEach((s) => {
-      if (s.subject) set.add(s.subject);
-    });
-    activeClassroom?.master_schedule?.forEach((s) => {
-      if (s.subject) set.add(s.subject);
-    });
-    notes.forEach((n) => {
-      if (n.subject) set.add(n.subject);
-    });
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [allSlots, activeClassroom, notes]);
+    const subjectMap = new Map<string, string>();
+    const addSubject = (raw?: string | null) => {
+      const trimmed = (raw || '').trim();
+      if (!trimmed) return;
+      const lower = trimmed.toLowerCase();
+      if (!subjectMap.has(lower)) {
+        subjectMap.set(lower, trimmed);
+      }
+    };
+
+    allSlots.forEach((s) => addSubject(s.subject));
+    activeClassroom?.master_schedule?.forEach((s) => addSubject(s.subject));
+    privateNotes.forEach((n) => addSubject(n.subject));
+    sharedNotes.forEach((n) => addSubject(n.subject));
+
+    return Array.from(subjectMap.values()).sort((a, b) => a.localeCompare(b));
+  }, [allSlots, activeClassroom, privateNotes, sharedNotes]);
 
   const handleCreateClassroom = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -588,10 +634,50 @@ export default function ClassroomsWorkspace({
     try {
       const { error } = await supabase.from('subject_notes').delete().eq('id', noteId);
       if (error) throw error;
-      setNotes((prev) => prev.filter((n) => n.id !== noteId));
+      setPrivateNotes((prev) => prev.filter((n) => n.id !== noteId));
+      setSharedNotes((prev) => prev.filter((n) => n.id !== noteId));
+      if (viewingNote?.id === noteId) setViewingNote(null);
       toast.success('Note deleted.');
     } catch (err: any) {
       toast.error('Failed to delete note: ' + err.message);
+    }
+  };
+
+  const handleDownloadNotePdf = (note: SubjectNote) => {
+    setDownloadingNoteId(note.id);
+    try {
+      const parsedJson = safeParseStudyJson<RichStudyResponse>(note.content);
+      const studyPayload: RichStudyResponse =
+        parsedJson && typeof parsedJson === 'object' && (parsedJson.title || parsedJson.explanation_markdown)
+          ? {
+              ...parsedJson,
+              title: parsedJson.title || note.title,
+              subject_tag: parsedJson.subject_tag || note.subject,
+            }
+          : {
+              title: note.title,
+              subject_tag: note.subject,
+              core_intuition: '',
+              explanation_markdown: note.content || '',
+              key_takeaways: [],
+              exam_tips: [],
+              references: [],
+            };
+
+      const { blob, filename } = compileStudyPdf(studyPayload, note.subject);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success('PDF downloaded!');
+    } catch (err: any) {
+      toast.error('Could not compile PDF: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setDownloadingNoteId(null);
     }
   };
 
@@ -607,7 +693,12 @@ export default function ClassroomsWorkspace({
 
   const filteredNotes = useMemo(() => {
     return notes.filter((n) => {
-      if (selectedSubjectFilter !== 'ALL' && n.subject !== selectedSubjectFilter) return false;
+      if (
+        selectedSubjectFilter !== 'ALL' &&
+        n.subject.trim().toLowerCase() !== selectedSubjectFilter.trim().toLowerCase()
+      ) {
+        return false;
+      }
       if (noteSearch.trim()) {
         const q = noteSearch.toLowerCase();
         return (
@@ -738,6 +829,17 @@ export default function ClassroomsWorkspace({
           >
             <BookOpen className="w-3.5 h-3.5" />
             <span>Subject Notes Pool</span>
+            {privateNotes.length > 0 && (
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold tabular-nums ${
+                  subTab === 'notes'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-purple-500/15 text-purple-600 dark:text-purple-400'
+                }`}
+              >
+                {privateNotes.length}
+              </span>
+            )}
           </button>
         </div>
 
@@ -1020,7 +1122,7 @@ export default function ClassroomsWorkspace({
                 }`}
               >
                 <Lock className="w-3.5 h-3.5" />
-                <span>My Private Vault</span>
+                <span>My Private Vault ({privateNotes.length})</span>
               </button>
             </div>
 
@@ -1067,25 +1169,37 @@ export default function ClassroomsWorkspace({
             >
               All Subjects
             </button>
-            {uniqueSubjects.map((sub) => (
-              <button
-                key={sub}
-                type="button"
-                onClick={() => setSelectedSubjectFilter(sub)}
-                className={`px-3 py-1 rounded-full text-[11px] font-semibold transition ${
-                  selectedSubjectFilter === sub
-                    ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
-                    : 'bg-zinc-200/70 dark:bg-zinc-800/70 text-zinc-600 dark:text-zinc-400'
-                }`}
-              >
-                {sub}
-              </button>
-            ))}
+            {uniqueSubjects.map((sub) => {
+              const isSelected =
+                selectedSubjectFilter !== 'ALL' &&
+                selectedSubjectFilter.trim().toLowerCase() === sub.trim().toLowerCase();
+              return (
+                <button
+                  key={sub}
+                  type="button"
+                  onClick={() => setSelectedSubjectFilter(sub)}
+                  className={`px-3 py-1 rounded-full text-[11px] font-semibold transition ${
+                    isSelected
+                      ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900'
+                      : 'bg-zinc-200/70 dark:bg-zinc-800/70 text-zinc-600 dark:text-zinc-400'
+                  }`}
+                >
+                  {sub}
+                </button>
+              );
+            })}
           </div>
 
           {notesScope === 'shared' && !activeClassroomId ? (
-            <div className="py-12 text-center text-xs text-zinc-400">
-              Join or create a classroom above to view and share notes with classmates.
+            <div className="py-12 text-center text-xs text-zinc-400 space-y-2">
+              <p>Join or create a classroom above to view and share notes with classmates.</p>
+              <button
+                type="button"
+                onClick={() => setNotesScope('private')}
+                className="px-4 py-1.5 rounded-full bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold transition"
+              >
+                Open My Private Vault ({privateNotes.length})
+              </button>
             </div>
           ) : loadingNotes ? (
             <div className="py-12 text-center text-xs text-zinc-400">Loading notes...</div>
@@ -1096,67 +1210,109 @@ export default function ClassroomsWorkspace({
                 No notes found in {notesScope === 'shared' ? 'this classroom pool' : 'your private vault'}.
               </p>
               <p className="text-[11px] text-zinc-400">
-                Click &ldquo;Post Note&rdquo; to add lecture summaries, unit guides, or PDF/Drive links.
+                Click &ldquo;Post Note&rdquo; to add personal notes, or save AI study guides from the AI Copilot.
               </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {filteredNotes.map((note) => (
-                <div
-                  key={note.id}
-                  className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 hover:shadow-sm transition flex flex-col justify-between gap-3"
-                >
-                  <div className="space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
-                          {note.subject}
-                        </span>
-                        {note.unit_tag && (
-                          <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400 border border-purple-500/20">
-                            {note.unit_tag}
+              {filteredNotes.map((note) => {
+                const isAiGenerated = note.unit_tag === 'AI Generated';
+                return (
+                  <div
+                    key={note.id}
+                    className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800 hover:shadow-sm transition flex flex-col justify-between gap-3"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                            {note.subject}
                           </span>
+
+                          {isAiGenerated ? (
+                            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/25 flex items-center gap-1">
+                              <Sparkles className="w-3 h-3" />
+                              <span>AI Generated</span>
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                              <User className="w-3 h-3" />
+                              <span>Uploaded by Me</span>
+                            </span>
+                          )}
+
+                          {note.unit_tag && !isAiGenerated && (
+                            <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-zinc-200/70 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border border-zinc-300/60 dark:border-zinc-700">
+                              {note.unit_tag}
+                            </span>
+                          )}
+                        </div>
+
+                        {note.user_id === user.id && (
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteNote(note.id)}
+                            className="p-1 text-zinc-400 hover:text-rose-500 transition shrink-0"
+                            title="Delete note"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         )}
                       </div>
 
-                      {note.user_id === user.id && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteNote(note.id)}
-                          className="p-1 text-zinc-400 hover:text-rose-500 transition"
-                          title="Delete note"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      )}
+                      <h4 className="text-sm font-bold tracking-tight">{note.title}</h4>
+                      <p className="text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap leading-relaxed line-clamp-4">
+                        {note.content}
+                      </p>
                     </div>
 
-                    <h4 className="text-sm font-bold tracking-tight">{note.title}</h4>
-                    <p className="text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-wrap leading-relaxed">
-                      {note.content}
-                    </p>
-                  </div>
+                    <div className="space-y-2.5 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+                      <div className="flex items-center justify-between text-[11px] text-zinc-400 gap-2 flex-wrap">
+                        <span>
+                          By <strong className="text-zinc-600 dark:text-zinc-300">{note.author_name}</strong> ·{' '}
+                          {new Date(note.created_at).toLocaleDateString()}
+                        </span>
 
-                  <div className="flex items-center justify-between pt-2 border-t border-zinc-100 dark:border-zinc-800 text-[11px] text-zinc-400">
-                    <span>
-                      By <strong className="text-zinc-600 dark:text-zinc-300">{note.author_name}</strong> ·{' '}
-                      {new Date(note.created_at).toLocaleDateString()}
-                    </span>
+                        {note.file_url && (
+                          <a
+                            href={note.file_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-500 hover:underline font-semibold flex items-center gap-1"
+                          >
+                            <FileText className="w-3 h-3" />
+                            <span>Resource</span>
+                            <ExternalLink className="w-3 h-3" />
+                          </a>
+                        )}
+                      </div>
 
-                    {note.file_url && (
-                      <a
-                        href={note.file_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-500 hover:underline font-semibold flex items-center gap-1"
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                        <span>Resource</span>
-                      </a>
-                    )}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => setViewingNote(note)}
+                          className="flex-1 min-w-[110px] px-3 py-1.5 rounded-xl bg-blue-600/10 hover:bg-blue-600/20 text-blue-600 dark:text-blue-400 border border-blue-500/20 text-xs font-semibold flex items-center justify-center gap-1.5 transition"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>View Note</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleDownloadNotePdf(note)}
+                          disabled={downloadingNoteId === note.id}
+                          className="flex-1 min-w-[120px] px-3 py-1.5 rounded-xl bg-emerald-600/10 hover:bg-emerald-600/20 disabled:opacity-50 text-emerald-700 dark:text-emerald-400 border border-emerald-500/25 text-xs font-semibold flex items-center justify-center gap-1.5 transition"
+                        >
+                          <FileDown className="w-3.5 h-3.5" />
+                          <span>
+                            {downloadingNoteId === note.id ? 'Exporting...' : 'Download PDF'}
+                          </span>
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -1328,6 +1484,78 @@ export default function ClassroomsWorkspace({
                 {savingNote ? 'Saving...' : 'Publish Note'}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: GLASSMORPHIC NOTE READER WITH KATEX + ON-DEMAND PDF DOWNLOAD */}
+      {viewingNote && (
+        <div
+          className="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setViewingNote(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="backdrop-blur-xl bg-white/95 dark:bg-[#121214]/95 border border-zinc-200 dark:border-zinc-800 rounded-[28px] max-w-3xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden"
+          >
+            <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 flex items-start justify-between gap-3 shrink-0">
+              <div className="space-y-1.5 min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                    {viewingNote.subject}
+                  </span>
+                  {viewingNote.unit_tag === 'AI Generated' ? (
+                    <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-600 dark:text-purple-400 border border-purple-500/25 flex items-center gap-1">
+                      <Sparkles className="w-3 h-3" />
+                      <span>AI Generated</span>
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                      <User className="w-3 h-3" />
+                      <span>Uploaded by Me</span>
+                    </span>
+                  )}
+                  {viewingNote.unit_tag && viewingNote.unit_tag !== 'AI Generated' && (
+                    <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-zinc-200/70 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300">
+                      {viewingNote.unit_tag}
+                    </span>
+                  )}
+                </div>
+                <h3 className="text-base font-extrabold tracking-tight text-zinc-900 dark:text-zinc-100">
+                  {viewingNote.title}
+                </h3>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  By {viewingNote.author_name} ·{' '}
+                  {new Date(viewingNote.created_at).toLocaleDateString()}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => handleDownloadNotePdf(viewingNote)}
+                  disabled={downloadingNoteId === viewingNote.id}
+                  className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
+                >
+                  <FileDown className="w-3.5 h-3.5" />
+                  <span>
+                    {downloadingNoteId === viewingNote.id ? 'Exporting...' : 'Download PDF'}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewingNote(null)}
+                  aria-label="Close Note Reader"
+                  className="w-8 h-8 rounded-full bg-zinc-200/70 dark:bg-zinc-800/70 hover:opacity-80 flex items-center justify-center text-zinc-500 transition"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6">
+              <RichStudyRenderer content={viewingNote.content} />
+            </div>
           </div>
         </div>
       )}

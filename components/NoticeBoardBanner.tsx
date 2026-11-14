@@ -4,11 +4,12 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import { Megaphone, ChevronDown, ChevronUp, Pin, Sparkles, X, History } from 'lucide-react';
 
+// STANDING RULE: On EVERY code generation or bug-fix iteration, increment APP_RELEASE.version (e.g. v2.6.9 -> v2.6.10) and update title/content with the exact features or fixes shipped in that turn.
 export const APP_RELEASE = {
-  version: 'v2.5.0',
-  title: 'Classrooms, Notes Pool, Exams & Assignments OS',
+  version: 'v2.6.9',
+  title: 'Reliable Cross-Page Navigation Without Iframe RSC Errors',
   content:
-    'Added shared classrooms, live bunk consensus, subject notes pools, exam datesheets with syllabus checklists, and assignment countdowns.',
+    'Switched cross-page navigation links (/, /dashboard, /privacy, /terms, /study/[code]) to standard document links so browser navigation never fails RSC payload fetches inside the preview iframe.',
 };
 
 interface AppUpdate {

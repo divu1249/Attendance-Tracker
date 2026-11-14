@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import Image from 'next/image';
 
 export default function NotFound() {
@@ -18,12 +17,12 @@ export default function NotFound() {
       <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-sm mt-2 mb-6">
         Looks like this lecture was skipped. The route you are looking for does not exist.
       </p>
-      <Link
+      <a
         href="/dashboard"
         className="px-5 py-2.5 rounded-full bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-lg shadow-blue-500/20 transition active:scale-95"
       >
         Return to Safety
-      </Link>
+      </a>
     </div>
   );
 }

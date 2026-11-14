@@ -11,6 +11,9 @@ import ClassroomsWorkspace from '@/components/ClassroomsWorkspace';
 import ExamsWorkspace from '@/components/ExamsWorkspace';
 import AssignmentsWorkspace from '@/components/AssignmentsWorkspace';
 import AdminTelemetryWorkspace from '@/components/AdminTelemetryWorkspace';
+import SuggestionBoxDrawer from '@/components/SuggestionBoxDrawer';
+import AiCopilotDrawer from '@/components/AiCopilotDrawer';
+import DailyBriefingCard from '@/components/DailyBriefingCard';
 import {
   Calendar as CalendarIcon,
   Check,
@@ -220,6 +223,10 @@ export default function CampusDashboard() {
 
   const [isOcrProcessing, setIsOcrProcessing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const [copilotOpen, setCopilotOpen] = useState(false);
+  const [copilotInitialTab, setCopilotInitialTab] = useState<'snap' | 'notes' | 'tutor'>('snap');
+  const [notesRefreshKey, setNotesRefreshKey] = useState(0);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -1549,6 +1556,19 @@ export default function CampusDashboard() {
 
           <div className="hidden md:flex items-center gap-2 flex-wrap">
             <button
+              type="button"
+              onClick={() => {
+                setCopilotInitialTab('snap');
+                setCopilotOpen(true);
+              }}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3.5 py-1.5 rounded-full bg-gradient-to-r from-blue-600 to-violet-600 hover:opacity-90 text-white shadow-sm transition"
+              title="Open AI Student Copilot"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>AI Copilot</span>
+            </button>
+
+            <button
               onClick={() => fileInputRef.current?.click()}
               disabled={isOcrProcessing}
               className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-full border border-zinc-200 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition"
@@ -1719,6 +1739,32 @@ export default function CampusDashboard() {
       <main className="max-w-6xl mx-auto p-4 md:p-8 space-y-8">
         <NoticeBoardBanner userEmail={user?.email} />
 
+        {activeTab === 'attendance' && (
+          <DailyBriefingCard
+            user={user}
+            profile={profile}
+            todayDate={selectedDate}
+            daySlots={daySlots}
+            stats={{
+              totalHeld,
+              totalAttended,
+              percentage,
+              target,
+              theoryHeld,
+              theoryPct,
+              labHeld,
+              labTarget,
+              labPct,
+              safeBunks,
+              recoveryClasses,
+            }}
+            onOpenCopilot={(tab = 'snap') => {
+              setCopilotInitialTab(tab);
+              setCopilotOpen(true);
+            }}
+          />
+        )}
+
         {activeTab === 'classrooms' && (
           <ClassroomsWorkspace
             user={user}
@@ -1728,6 +1774,7 @@ export default function CampusDashboard() {
             onReloadData={loadData}
             activeClassroomId={activeClassroomId}
             onSelectClassroom={setActiveClassroomId}
+            notesRefreshKey={notesRefreshKey}
           />
         )}
 
@@ -2190,7 +2237,19 @@ export default function CampusDashboard() {
       </main>
 
       {/* Sticky Mobile Dock Bar */}
-      <aside aria-label="Mobile Navigation Dock" className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-xl border-t border-zinc-200 dark:border-zinc-800 px-4 py-2 flex items-center justify-around safe-area-pb">
+      <aside aria-label="Mobile Navigation Dock" className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-xl border-t border-zinc-200 dark:border-zinc-800 px-3 py-2 flex items-center justify-around safe-area-pb">
+        <button
+          type="button"
+          onClick={() => {
+            setCopilotInitialTab('snap');
+            setCopilotOpen(true);
+          }}
+          className="flex flex-col items-center gap-1 text-[10px] text-blue-500 font-semibold"
+        >
+          <Sparkles className="w-4 h-4" />
+          <span>Copilot</span>
+        </button>
+
         <button
           onClick={() => setShowSimulator(true)}
           className="flex flex-col items-center gap-1 text-[10px] text-zinc-600 dark:text-zinc-400 font-medium"
@@ -3193,12 +3252,28 @@ export default function CampusDashboard() {
         </div>
       )}
 
+      {/* Persistent Floating Side Banner & Reddit-Style Suggestion Box */}
+      <SuggestionBoxDrawer user={user} profile={profile} />
+
+      {/* Dual-Engine AI Student Copilot Drawer */}
+      <AiCopilotDrawer
+        isOpen={copilotOpen}
+        onClose={() => setCopilotOpen(false)}
+        user={user}
+        profile={profile}
+        allSlots={allSlots}
+        selectedDate={selectedDate}
+        initialTab={copilotInitialTab}
+        onDataMutated={loadData}
+        onNoteSaved={() => setNotesRefreshKey((k) => k + 1)}
+      />
+
       {/* Footer */}
       <footer className="py-8 text-center text-xs text-zinc-400 space-y-2 border-t border-zinc-200 dark:border-zinc-800 mt-12">
         <div className="flex items-center justify-center gap-4 text-[11px] font-medium text-zinc-500">
-          <Link href="/privacy" className="hover:underline">Privacy Policy</Link>
+          <a href="/privacy" className="hover:underline">Privacy Policy</a>
           <span>·</span>
-          <Link href="/terms" className="hover:underline">Terms of Service</Link>
+          <a href="/terms" className="hover:underline">Terms of Service</a>
           <span>·</span>
           <a href="https://github.com/divu1249/Attendance-Tracker" target="_blank" rel="noopener noreferrer" className="hover:underline">
             GitHub (MIT)

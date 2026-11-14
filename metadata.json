@@ -1,0 +1,8 @@
+{
+  "name": "ShouldISkip",
+  "description": "Smart Attendance Margin Tracker, Collaborative Classrooms & AI Student Copilot.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
